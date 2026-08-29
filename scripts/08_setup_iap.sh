@@ -26,6 +26,8 @@ IP_NAME="${IP_NAME:-tpu-notebooks-ip}"
 # Ensure DOMAIN has a fallback if not set in Makefile
 DOMAIN="${DOMAIN:-}"
 STUDENT_GROUP="${STUDENT_GROUP:-}"
+TA_GROUP="${TA_GROUP:-}"
+ADMIN_USERS="${ADMIN_USERS:-}"
 TEST_ACCOUNTS="${TEST_ACCOUNTS:-}"
 
 CTX="gke_${PROJECT}_${REGION}_${CLUSTER}"
@@ -57,38 +59,55 @@ sed -e "s|__DOMAIN__|${DOMAIN}|g" -e "s|__NAMESPACE__|${NAMESPACE}|g" \
 
 echo "==> granting IAP access"
 
-if [[ -n "${STUDENT_GROUP}" ]]; then
-  echo "    granting to ${STUDENT_GROUP}"
+bind_iam_member() {
+  local member="$1"
+  local role="roles/iap.httpsResourceAccessor"
+  echo "    granting to ${member}"
   gcloud projects add-iam-policy-binding "${PROJECT}" \
-    --member="${STUDENT_GROUP}" \
-    --role="roles/iap.httpsResourceAccessor" \
+    --member="${member}" \
+    --role="${role}" \
     --condition=None >/dev/null 2>&1 \
-    && echo "    ok" \
-    || echo "    could not bind group; grant roles/iap.httpsResourceAccessor by hand"
-else
-  echo "    no STUDENT_GROUP specified in Makefile; skipping group bind"
-fi
+    && echo "      ok: ${member}" \
+    || echo "      warning: could not bind ${member}; grant ${role} manually if needed"
+}
 
-if [[ -n "${TEST_ACCOUNTS}" ]]; then
-  for acct in ${TEST_ACCOUNTS}; do
-    echo "    granting to ${acct}"
-    gcloud projects add-iam-policy-binding "${PROJECT}" \
-      --member="${acct}" \
-      --role="roles/iap.httpsResourceAccessor" \
-      --condition=None >/dev/null 2>&1 \
-      && echo "    ok" \
-      || echo "    could not bind ${acct}; grant roles/iap.httpsResourceAccessor by hand"
+# 1. Student Group
+if [[ -n "${STUDENT_GROUP}" ]]; then
+  for grp in ${STUDENT_GROUP}; do
+    [[ "${grp}" != group:* && "${grp}" != user:* ]] && grp="group:${grp}"
+    bind_iam_member "${grp}"
   done
 fi
 
-if [[ -z "${STUDENT_GROUP}" ]] && [[ -z "${TEST_ACCOUNTS}" ]]; then
-  # Fallback to current user if nothing is configured
+# 2. TA Group
+if [[ -n "${TA_GROUP}" ]]; then
+  for grp in ${TA_GROUP}; do
+    [[ "${grp}" != group:* && "${grp}" != user:* ]] && grp="group:${grp}"
+    bind_iam_member "${grp}"
+  done
+fi
+
+# 3. Admin Users
+if [[ -n "${ADMIN_USERS}" ]]; then
+  for adm in ${ADMIN_USERS}; do
+    [[ "${adm}" != user:* && "${adm}" != group:* ]] && adm="user:${adm}"
+    bind_iam_member "${adm}"
+  done
+fi
+
+# 4. Individual Test / Manual Accounts
+if [[ -n "${TEST_ACCOUNTS}" ]]; then
+  for acct in ${TEST_ACCOUNTS}; do
+    [[ "${acct}" != user:* && "${acct}" != group:* ]] && acct="user:${acct}"
+    bind_iam_member "${acct}"
+  done
+fi
+
+# 5. Fallback if nothing configured at all
+if [[ -z "${STUDENT_GROUP}" ]] && [[ -z "${TA_GROUP}" ]] && [[ -z "${ADMIN_USERS}" ]] && [[ -z "${TEST_ACCOUNTS}" ]]; then
   FALLBACK_USER="user:$(gcloud config get-value account 2>/dev/null)"
-  echo "    no IAP identities configured. granting to ${FALLBACK_USER}"
-  gcloud projects add-iam-policy-binding "${PROJECT}" \
-    --member="${FALLBACK_USER}" \
-    --role="roles/iap.httpsResourceAccessor" \
-    --condition=None >/dev/null 2>&1 || true
+  echo "    no IAP identities configured. granting to fallback account ${FALLBACK_USER}"
+  bind_iam_member "${FALLBACK_USER}"
 fi
 
 cat <<EOF

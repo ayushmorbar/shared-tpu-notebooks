@@ -23,9 +23,11 @@ STUDENTS      ?= 40
 POOL_CHIPS    ?= 32
 DOMAIN        ?= # e.g. jupyter.cs.cmu.edu
 STUDENT_GROUP ?= # e.g. group:idl-11785-students@cmu.edu
-TEST_ACCOUNTS ?= # e.g. user:test1@cmu.edu user:ta1@cmu.edu
+TA_GROUP      ?= # e.g. group:idl-11785-tas@cmu.edu
+ADMIN_USERS   ?= # e.g. user:bradley@cmu.edu user:ayush@cmu.edu
+TEST_ACCOUNTS ?= # e.g. user:test1@cmu.edu user:devansh@cmu.edu
 
-export PROJECT REGION CLUSTER STUDENTS POOL_CHIPS DOMAIN STUDENT_GROUP TEST_ACCOUNTS
+export PROJECT REGION CLUSTER STUDENTS POOL_CHIPS DOMAIN STUDENT_GROUP TA_GROUP ADMIN_USERS TEST_ACCOUNTS
 
 .PHONY: check preflight cluster hub iap warm-on warm-off demo smoke scale report teardown venv
 

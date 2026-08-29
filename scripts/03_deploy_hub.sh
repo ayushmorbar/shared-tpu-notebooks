@@ -82,6 +82,15 @@ sed "s|__APISERVER_ENDPOINT__|${APISERVER}|" \
 IMAGE_NAME="${REGION}-docker.pkg.dev/${PROJECT}/course-images/scipy-notebook"
 IMAGE_TAG="latest"
 
+ADMIN_USERS="${ADMIN_USERS:-instructor}"
+ADMIN_LIST=()
+for u in $(echo "${ADMIN_USERS}" | tr ',' ' '); do
+  uname=$(echo "${u}" | sed -e 's/^user://' -e 's/@.*//')
+  [[ -n "${uname}" ]] && ADMIN_LIST+=("${uname}")
+done
+ADMIN_STR=$(IFS=,; echo "${ADMIN_LIST[*]}")
+echo "==> configured JupyterHub admin users: ${ADMIN_STR}"
+
 echo "==> installing JupyterHub ${CHART_VERSION} into ${NAMESPACE}"
 helm upgrade --install "${RELEASE}" jupyterhub/jupyterhub \
   --namespace "${NAMESPACE}" \
@@ -89,6 +98,7 @@ helm upgrade --install "${RELEASE}" jupyterhub/jupyterhub \
   --values "${VALUES}" \
   --set singleuser.image.name="${IMAGE_NAME}" \
   --set singleuser.image.tag="${IMAGE_TAG}" \
+  --set "hub.config.Authenticator.admin_users={${ADMIN_STR}}" \
   --set-file "singleuser.extraFiles.submit_tpu\.py.stringData=$(dirname "$0")/../notebooks/submit_tpu.py" \
   --set-file "singleuser.extraFiles.hw0_tpu_hello\.ipynb.stringData=$(dirname "$0")/../notebooks/hw0_tpu_hello.ipynb" \
   --timeout 20m \
