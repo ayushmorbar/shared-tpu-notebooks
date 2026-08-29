@@ -29,7 +29,7 @@ TEST_ACCOUNTS ?= # e.g. user:test1@cmu.edu user:devansh@cmu.edu
 
 export PROJECT REGION CLUSTER STUDENTS POOL_CHIPS DOMAIN STUDENT_GROUP TA_GROUP ADMIN_USERS TEST_ACCOUNTS
 
-.PHONY: check preflight cluster hub iap warm-on warm-off demo smoke scale report teardown venv
+.PHONY: check preflight cluster image hub iap warm-on warm-off demo smoke scale report teardown venv
 
 check:
 ifndef PROJECT
@@ -38,6 +38,9 @@ endif
 
 preflight: check
 	bash scripts/00_preflight.sh
+
+image: check
+	bash scripts/01_build_image.sh
 
 cluster: check
 	bash scripts/02_create_cluster.sh

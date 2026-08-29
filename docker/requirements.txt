@@ -9,6 +9,10 @@ torchaudio
 # Data Science & ML Utilities
 augmax
 
+# ML Experiment Tracking & Data Ingestion
+kaggle>=1.8.0
+wandb>=0.23.1
+
 # NumPy: arrays and general numerical computing.
 numpy==2.3.4
 
