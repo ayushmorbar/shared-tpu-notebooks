@@ -13,7 +13,7 @@ REGION="${REGION:-us-west4}"
 CLUSTER="${CLUSTER:-tpu-notebooks}"
 NAMESPACE="${NAMESPACE:-cmu-idl}"
 RELEASE="${RELEASE:-hub}"
-CHART_VERSION="${CHART_VERSION:-4.2.0}"
+CHART_VERSION="${CHART_VERSION:-4.4.1}"
 
 gcloud container clusters get-credentials "${CLUSTER}" \
   --region="${REGION}" --project="${PROJECT}" >/dev/null 2>&1
@@ -64,12 +64,14 @@ helm repo update >/dev/null
 
 # The singleuser NetworkPolicy has to name the API server's real endpoint, because
 # Dataplane V2 applies policy after the Service DNAT and the ClusterIP never matches.
-# Resolve it here rather than hardcoding it in the values file.
-APISERVER=$(kubectl get endpoints kubernetes -n default \
-              -o jsonpath='{.subsets[0].addresses[0].ip}')
+# Resolve it via modern discovery.k8s.io/v1 EndpointSlices with fallback to v1 Endpoints.
+APISERVER=$(kubectl get endpointslices -n default -l kubernetes.io/service-name=kubernetes \
+              -o jsonpath='{.items[0].endpoints[0].addresses[0]}' 2>/dev/null \
+            || kubectl get endpoints kubernetes -n default \
+              -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || true)
 if [[ -z "${APISERVER}" ]]; then
   echo "could not resolve the API server endpoint; student notebooks will not be able" >&2
-  echo "to submit TPU jobs. Check: kubectl get endpoints kubernetes -n default" >&2
+  echo "to submit TPU jobs. Check: kubectl get endpointslices -n default" >&2
   exit 1
 fi
 echo "==> API server endpoint ${APISERVER} (not the ClusterIP -- see the values file)"
