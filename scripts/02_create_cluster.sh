@@ -12,29 +12,25 @@
 # The trade Autopilot makes is billing. A TPU pod is node-billed, so you pay for the
 # whole 24 vCPU / 48 GiB node for as long as the pod lives. That is why student TPU
 # work is a short Job and not a long-lived notebook.
-set -euo pipefail
+source "$(dirname "$0")/common.sh"
+require_project
+check_prereqs gcloud kubectl
 
-PROJECT="${PROJECT:-${PROJECT:?set PROJECT to your GCP project id}}"
-REGION="${REGION:-us-west4}"
-CLUSTER="${CLUSTER:-tpu-notebooks}"
-NAMESPACE="${NAMESPACE:-cmu-idl}"
 KUEUE_VERSION="${KUEUE_VERSION:-v0.19.1}"
-POOL_CHIPS="${POOL_CHIPS:-32}"
-STUDENTS="${STUDENTS:-40}"
 
-echo "==> cluster ${CLUSTER} in ${REGION}"
+log_header "Provisioning GKE Autopilot Cluster '${CLUSTER}' in '${REGION}'"
 if ! gcloud container clusters describe "${CLUSTER}" --region="${REGION}" \
        --project="${PROJECT}" >/dev/null 2>&1; then
+  log_info "Creating Autopilot cluster (Rapid release channel)..."
   gcloud container clusters create-auto "${CLUSTER}" \
     --project="${PROJECT}" --region="${REGION}" \
     --release-channel=rapid \
     --network=default --subnetwork=default
 else
-  echo "    exists"
+  log_success "Cluster '${CLUSTER}' already exists."
 fi
 
-gcloud container clusters get-credentials "${CLUSTER}" \
-  --region="${REGION}" --project="${PROJECT}"
+ensure_k8s_context
 
 # Guard against runaway log ingestion costs ($0.50/GiB). A student writing
 # `while True: print("hello")` can silently ingest terabytes of logs overnight.

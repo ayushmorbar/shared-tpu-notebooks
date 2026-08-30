@@ -31,6 +31,8 @@ TPU_IMAGE = os.environ.get(
     "TPU_IMAGE", "us-docker.pkg.dev/cloud-tpu-images/jax-ai-image/tpu:latest"
 )
 QUEUE = os.environ.get("KUEUE_LOCAL_QUEUE", "tpu")
+TPU_ACCELERATOR = os.environ.get("TPU_ACCELERATOR", "tpu-v5-lite-podslice")
+TPU_TOPOLOGY = os.environ.get("TPU_TOPOLOGY", "1x1")
 
 
 class JobInterrupted(RuntimeError):
@@ -100,8 +102,8 @@ def run(code: str, timeout: int = 28800, keep: bool = False) -> str:
                     # Fungible: yields to notebooks, Kueue re-queues it.
                     priority_class_name="student-tpu-job",
                     node_selector={
-                        "cloud.google.com/gke-tpu-accelerator": "tpu-v5-lite-podslice",
-                        "cloud.google.com/gke-tpu-topology": "1x1",
+                        "cloud.google.com/gke-tpu-accelerator": TPU_ACCELERATOR,
+                        "cloud.google.com/gke-tpu-topology": TPU_TOPOLOGY,
                     },
                     tolerations=[
                         client.V1Toleration(

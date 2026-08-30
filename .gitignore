@@ -1,4 +1,22 @@
+# Virtual Environment
 .venv/
+env/
+venv/
+
+# Python Cache
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+
+# Local Configuration & Secrets (DO NOT COMMIT)
+config.env
+*.env.local
+.env
+
+# Benchmark & Test Results
 results/
+*.log
+
+# OS Metadata
+.DS_Store
+Thumbs.db

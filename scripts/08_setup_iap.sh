@@ -16,24 +16,14 @@
 #      refuses to serve until it exists. The script prints the link.
 #   2. A Google-managed certificate takes 15 to 60 minutes to reach ACTIVE. The script
 #      polls and tells you where it is rather than pretending it is instant.
-set -euo pipefail
+source "$(dirname "$0")/common.sh"
+require_project
+check_prereqs gcloud kubectl
 
-PROJECT="${PROJECT:-${PROJECT:?set PROJECT to your GCP project id}}"
-REGION="${REGION:-us-west4}"
-CLUSTER="${CLUSTER:-tpu-notebooks}"
-NAMESPACE="${NAMESPACE:-cmu-idl}"
 IP_NAME="${IP_NAME:-tpu-notebooks-ip}"
-# Ensure DOMAIN has a fallback if not set in Makefile
-DOMAIN="${DOMAIN:-}"
-STUDENT_GROUP="${STUDENT_GROUP:-}"
-TA_GROUP="${TA_GROUP:-}"
-ADMIN_USERS="${ADMIN_USERS:-}"
-TEST_ACCOUNTS="${TEST_ACCOUNTS:-}"
 
-CTX="gke_${PROJECT}_${REGION}_${CLUSTER}"
-gcloud container clusters get-credentials "${CLUSTER}" \
-  --region="${REGION}" --project="${PROJECT}" >/dev/null 2>&1
-K=(kubectl --context="${CTX}")
+ensure_k8s_context
+K=(kubectl --context="${GKE_CTX}")
 
 echo "==> APIs"
 gcloud services enable iap.googleapis.com compute.googleapis.com --project="${PROJECT}" >/dev/null
@@ -148,7 +138,7 @@ else
 
 Certificate is still "${STATUS:-pending}". That's normal for up to an hour. Check with:
 
-  kubectl --context=${CTX} -n ${NAMESPACE} describe managedcertificate hub-cert
+  kubectl --context=${GKE_CTX} -n ${NAMESPACE} describe managedcertificate hub-cert
 
 FailedNotVisible means the domain doesn't resolve to ${IP} yet. If it's still failing
 after an hour, nip.io may be rejected by the CA; register a real domain, point an A
