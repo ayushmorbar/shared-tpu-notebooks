@@ -7,30 +7,18 @@
 #
 # Warm chips bill continuously. Leaving this on overnight is the expensive mistake, so
 # `on` always prints the burn rate and `status` always prints the running total.
-set -euo pipefail
+source "$(dirname "$0")/common.sh"
+require_project
+check_prereqs kubectl
 
-PROJECT="${PROJECT:-${PROJECT:?set PROJECT to your GCP project id}}"
-REGION="${REGION:-us-west4}"
-CLUSTER="${CLUSTER:-tpu-notebooks}"
-NAMESPACE="${NAMESPACE:-cmu-idl}"
-CHIP_HR="${CHIP_HR:-1.35}"   # v5e node-billed on Autopilot: base chip rate + premium
-DEFAULT_REPLICAS="${DEFAULT_REPLICAS:-1}"
-
-# Pin the context. The default kubectl context in this workspace drifted to an unrelated
-# cluster three times in one session, and a drifted context silently targets the wrong
-# place.
-CTX="gke_${PROJECT}_${REGION}_${CLUSTER}"
-if ! kubectl config get-contexts -o name 2>/dev/null | grep -qx "${CTX}"; then
-  gcloud container clusters get-credentials "${CLUSTER}" \
-    --region="${REGION}" --project="${PROJECT}" >/dev/null 2>&1
-fi
-K=(kubectl --context="${CTX}" -n "${NAMESPACE}")
+ensure_k8s_context
+K=(kubectl --context="${GKE_CTX}" -n "${NAMESPACE}")
 
 ACTION="${1:-status}"
 
 warm_nodes() {
-  kubectl --context="${CTX}" get nodes \
-    -l cloud.google.com/gke-tpu-accelerator=tpu-v5-lite-podslice \
+  kubectl --context="${GKE_CTX}" get nodes \
+    -l cloud.google.com/gke-tpu-accelerator="${TPU_ACCELERATOR}" \
     --no-headers 2>/dev/null | wc -l | tr -d ' '
 }
 
@@ -48,7 +36,7 @@ case "${ACTION}" in
     echo "guardrail -> Auto-off scheduled daily at 22:00 UTC (CronJob: tpu-warm-pool-auto-off)"
     echo
     echo "Nodes take 2-4 min to arrive. Watch them:"
-    echo "  kubectl --context=${CTX} get nodes -l cloud.google.com/gke-tpu-accelerator=tpu-v5-lite-podslice -w"
+    echo "  kubectl --context=${GKE_CTX} get nodes -l cloud.google.com/gke-tpu-accelerator=${TPU_ACCELERATOR} -w"
     echo
     echo "Turn it off when you're done:  bash $(basename "$0") off"
     ;;

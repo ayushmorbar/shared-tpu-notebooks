@@ -1,16 +1,7 @@
-# shared-tpu-notebooks
-#
-# PROJECT is required. Everything else has a working default.
-#
-#   make preflight   PROJECT=my-project      # read-only, costs nothing
-#   make cluster     PROJECT=my-project      # ~12 min
-#   make hub         PROJECT=my-project
-#   make demo        PROJECT=my-project      # cluster + hub + one real TPU job
-#   make iap         PROJECT=my-project      # HTTPS + Google sign-in, once
-#   make warm-on     PROJECT=my-project      # hold WARM chips ready (default 1)
-#   make warm-off    PROJECT=my-project
-#   make scale       PROJECT=my-project      # 100 students through 32 chips
-#   make teardown    PROJECT=my-project
+# ==============================================================================
+# shared-tpu-notebooks Makefile
+# ==============================================================================
+-include config.env
 
 PROJECT ?=
 REGION  ?= us-west4
@@ -27,13 +18,18 @@ TA_GROUP      ?= # e.g. group:idl-11785-tas@cmu.edu
 ADMIN_USERS   ?= # e.g. user:bradley@cmu.edu user:ayush@cmu.edu
 TEST_ACCOUNTS ?= # e.g. user:test1@cmu.edu user:devansh@cmu.edu
 
-export PROJECT REGION CLUSTER STUDENTS POOL_CHIPS DOMAIN STUDENT_GROUP TA_GROUP ADMIN_USERS TEST_ACCOUNTS
+# Hardware & Accelerator Generation
+TPU_ACCELERATOR ?= tpu-v5-lite-podslice
+TPU_TOPOLOGY    ?= 1x1
+TPU_IMAGE       ?= us-docker.pkg.dev/cloud-tpu-images/jax-ai-image/tpu:latest
 
-.PHONY: check preflight cluster image hub iap warm-on warm-off demo smoke scale report teardown venv
+export PROJECT REGION CLUSTER NS NAMESPACE=$(NS) STUDENTS POOL_CHIPS WARM DOMAIN STUDENT_GROUP TA_GROUP ADMIN_USERS TEST_ACCOUNTS TPU_ACCELERATOR TPU_TOPOLOGY TPU_IMAGE
+
+.PHONY: check preflight cluster image hub iap warm-on warm-off demo smoke scale report clean-pvcs clean-pvcs-dry-run teardown venv help
 
 check:
 ifndef PROJECT
-	$(error PROJECT is not set. Try: make $(MAKECMDGOALS) PROJECT=my-gcp-project)
+	$(error PROJECT is not set. Set it in config.env or run: make $(MAKECMDGOALS) PROJECT=my-gcp-project)
 endif
 
 preflight: check

@@ -4,16 +4,15 @@
 # The verification at the end is not decoration. A TPU node left Ready is $1.20/hr,
 # and a queued resource left in ACTIVE bills the same whether or not anyone is using
 # it. Both survive a casual "I deleted the cluster".
-set -uo pipefail
+source "$(dirname "$0")/common.sh"
+require_project
+check_prereqs gcloud
 
-PROJECT="${PROJECT:?set PROJECT to your GCP project id}"
-REGION="${REGION:-us-west4}"
-CLUSTER="${CLUSTER:-tpu-notebooks}"
 SPRAY_ZONES="${SPRAY_ZONES:-us-west4-a us-central1-a us-south1-a europe-west4-b europe-west4-a us-east5-a}"
 
-echo "==> deleting cluster ${CLUSTER}"
+log_header "Tearing down cluster '${CLUSTER}' in '${REGION}'"
 gcloud container clusters delete "${CLUSTER}" \
-  --region="${REGION}" --project="${PROJECT}" --quiet 2>&1 || echo "    already gone"
+  --region="${REGION}" --project="${PROJECT}" --quiet 2>&1 || log_info "Cluster already deleted."
 
 echo
 echo "==> deleting any queued resources left by 01_spray_v5e.sh"

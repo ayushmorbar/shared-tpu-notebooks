@@ -9,28 +9,21 @@
 #   bash 10_cleanup_pvcs.sh [--dry-run]
 #   bash 10_cleanup_pvcs.sh --execute
 
-set -euo pipefail
+source "$(dirname "$0")/common.sh"
+require_project
+check_prereqs gcloud kubectl jq
 
-PROJECT="${PROJECT:-${PROJECT:?set PROJECT to your GCP project id}}"
-REGION="${REGION:-us-west4}"
-CLUSTER="${CLUSTER:-tpu-notebooks}"
-NAMESPACE="${NAMESPACE:-cmu-idl}"
 DRY_RUN=1
 
 if [[ "${1:-}" == "--execute" ]]; then
   DRY_RUN=0
-  echo "WARNING: Running in EXECUTE mode. Data will be deleted."
+  log_warn "Running in EXECUTE mode. Data will be deleted."
 else
-  echo "Running in DRY-RUN mode. Pass --execute to actually delete resources."
+  log_info "Running in DRY-RUN mode. Pass --execute to actually delete resources."
 fi
 
-# Pin the context
-CTX="gke_${PROJECT}_${REGION}_${CLUSTER}"
-if ! kubectl config get-contexts -o name 2>/dev/null | grep -qx "${CTX}"; then
-  gcloud container clusters get-credentials "${CLUSTER}" \
-    --region="${REGION}" --project="${PROJECT}" >/dev/null 2>&1
-fi
-K=(kubectl --context="${CTX}")
+ensure_k8s_context
+K=(kubectl --context="${GKE_CTX}")
 
 echo "==> Finding PVCs in namespace: ${NAMESPACE}"
 PVCS=$("${K[@]}" -n "${NAMESPACE}" get pvc -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.volumeName}{"\n"}{end}')

@@ -16,12 +16,14 @@
 #                            consume, including for a single chip (v5litepod-1 / 1x1).
 #
 # Asking support to raise Device quota when you needed PodSlice is a wasted round trip.
-set -uo pipefail
+source "$(dirname "$0")/common.sh"
+require_project
+check_prereqs gcloud
 
-PROJECT="${PROJECT:-${PROJECT:?set PROJECT to your GCP project id}}"
 REGIONS="${REGIONS:-us-west4 us-central1 europe-west4 us-south1 us-east5 us-west1}"
 
-echo "project: ${PROJECT}"
+log_header "TPU Regional Quota & Availability Preflight"
+log_info "Target Project: ${PROJECT}"
 echo
 
 printf '%-16s %10s %10s %10s %10s  %s\n' \

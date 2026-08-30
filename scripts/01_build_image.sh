@@ -4,17 +4,18 @@
 # We inherit from the standard scipy-notebook and bake in the kubernetes client.
 # This saves several seconds on every student pod's cold start compared to running
 # a pip install in a postStart lifecycle hook.
-set -euo pipefail
-
-PROJECT="${PROJECT:-${PROJECT:?set PROJECT to your GCP project id}}"
-REGION="${REGION:-us-west4}"
+source "$(dirname "$0")/common.sh"
+require_project
+check_prereqs gcloud docker
 
 REPO="${REGION}-docker.pkg.dev/${PROJECT}/course-images"
 IMAGE="${REPO}/scipy-notebook:latest"
 
-echo "==> checking if Artifact Registry repository exists"
+log_header "Building & Pushing Course Docker Image"
+log_info "Target Image: ${IMAGE}"
+
 if ! gcloud artifacts repositories describe course-images --location="${REGION}" --project="${PROJECT}" >/dev/null 2>&1; then
-  echo "    creating repository course-images in ${REGION}"
+  log_info "Creating Artifact Registry repository 'course-images' in ${REGION}..."
 
   # Cleanup policy: automatically delete untagged images older than 30 days.
   # Without this, stale image layers accumulate indefinitely and bill for storage.

@@ -6,19 +6,16 @@
 # touch another namespace, cannot create a Job with a node selector of its choosing
 # outside what the pod template allows, and cannot edit the ClusterQueue that caps
 # the pool. Student code is untrusted; treat it that way.
-set -euo pipefail
+source "$(dirname "$0")/common.sh"
+require_project
+check_prereqs gcloud kubectl helm
 
-PROJECT="${PROJECT:-${PROJECT:?set PROJECT to your GCP project id}}"
-REGION="${REGION:-us-west4}"
-CLUSTER="${CLUSTER:-tpu-notebooks}"
-NAMESPACE="${NAMESPACE:-cmu-idl}"
 RELEASE="${RELEASE:-hub}"
 CHART_VERSION="${CHART_VERSION:-4.4.1}"
 
-gcloud container clusters get-credentials "${CLUSTER}" \
-  --region="${REGION}" --project="${PROJECT}" >/dev/null 2>&1
+ensure_k8s_context
 
-echo "==> student service account + RBAC in ${NAMESPACE}"
+log_header "Configuring Student RBAC in Namespace '${NAMESPACE}'"
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: ServiceAccount
