@@ -12,7 +12,7 @@ set -euo pipefail
 PROJECT="${PROJECT:-${PROJECT:?set PROJECT to your GCP project id}}"
 REGION="${REGION:-us-west4}"
 CLUSTER="${CLUSTER:-tpu-notebooks}"
-NAMESPACE="${NAMESPACE:-class-sec-a}"
+NAMESPACE="${NAMESPACE:-cmu-idl}"
 CHIP_HR="${CHIP_HR:-1.35}"   # v5e node-billed on Autopilot: base chip rate + premium
 DEFAULT_REPLICAS="${DEFAULT_REPLICAS:-1}"
 

@@ -17,6 +17,7 @@ set -euo pipefail
 PROJECT="${PROJECT:-${PROJECT:?set PROJECT to your GCP project id}}"
 REGION="${REGION:-us-west4}"
 CLUSTER="${CLUSTER:-tpu-notebooks}"
+NAMESPACE="${NAMESPACE:-cmu-idl}"
 KUEUE_VERSION="${KUEUE_VERSION:-v0.19.1}"
 POOL_CHIPS="${POOL_CHIPS:-32}"
 STUDENTS="${STUDENTS:-40}"
