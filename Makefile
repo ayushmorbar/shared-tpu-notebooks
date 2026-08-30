@@ -84,5 +84,28 @@ scale: check venv
 report: venv
 	./.venv/bin/python scripts/05_report.py
 
+# Clean up retained PVCs and underlying GCP persistent disks at end of term
+clean-pvcs-dry-run: check
+	bash scripts/10_cleanup_pvcs.sh --dry-run
+
+clean-pvcs: check
+	bash scripts/10_cleanup_pvcs.sh --execute
+
 teardown: check
 	bash scripts/99_teardown.sh
+
+help:
+	@echo "shared-tpu-notebooks Makefile commands:"
+	@echo "  make preflight PROJECT=...   Check regional quota and accelerator types (free)"
+	@echo "  make image PROJECT=...       Build & push custom course image to Artifact Registry"
+	@echo "  make cluster PROJECT=...     Create GKE Autopilot cluster, Kueue, & quotas (~12m)"
+	@echo "  make hub PROJECT=...         Deploy JupyterHub Helm chart & student RBAC"
+	@echo "  make smoke PROJECT=...       Submit 1 verification TPU job on 1 v5e chip"
+	@echo "  make iap PROJECT=...         Configure HTTPS Ingress & Google Identity-Aware Proxy"
+	@echo "  make warm-on PROJECT=...     Hold WARM placeholder chips ready (default WARM=1)"
+	@echo "  make warm-off PROJECT=...    Release warm placeholder chips"
+	@echo "  make scale PROJECT=...       Run concurrency scale test (STUDENTS=100 POOL_CHIPS=32)"
+	@echo "  make report                  Generate analytics report from latest test run"
+	@echo "  make clean-pvcs-dry-run      Preview retained PVCs & persistent disks"
+	@echo "  make clean-pvcs              Permanently delete retained PVCs & persistent disks"
+	@echo "  make teardown PROJECT=...    Destroy cluster, queued resources, and static IP"
