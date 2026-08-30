@@ -22,7 +22,7 @@ import subprocess
 import sys
 import time
 
-NS = os.environ.get("NAMESPACE", "class-sec-a")
+NS = os.environ.get("NAMESPACE", "cmu-idl")
 PROFILE = "course-default-cpu-notebook"
 
 

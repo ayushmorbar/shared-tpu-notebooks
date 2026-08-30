@@ -21,7 +21,7 @@ set -euo pipefail
 PROJECT="${PROJECT:-${PROJECT:?set PROJECT to your GCP project id}}"
 REGION="${REGION:-us-west4}"
 CLUSTER="${CLUSTER:-tpu-notebooks}"
-NAMESPACE="${NAMESPACE:-class-sec-a}"
+NAMESPACE="${NAMESPACE:-cmu-idl}"
 IP_NAME="${IP_NAME:-tpu-notebooks-ip}"
 # Ensure DOMAIN has a fallback if not set in Makefile
 DOMAIN="${DOMAIN:-}"
