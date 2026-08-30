@@ -2,13 +2,13 @@
 
 Give several hundred students access to Cloud TPUs from Jupyter notebooks without allocating a dedicated chip for each student.
 
-In a benchmark test run, **300 students shared 64 v5e chips**. The entire queue drained in **12.4 minutes** and cost **$11.93**.
+In a measured benchmark run, **300 students shared 64 v5e chips**. The entire queue drained in **12.4 minutes** and cost **$11.93** (compared to $73.58 for dedicated chips).
 
 ---
 
 ## 1. How It Works
 
-GKE assigns one pod per Cloud TPU node, and that pod uses all chips on that node. Two pods cannot share a single physical TPU chip. Consequently, attaching a TPU directly to a student's notebook holds an expensive node for the entire duration the browser tab remains open. For a class of 300 students, that would require 300 dedicated chips (~$405/hr on-demand).
+GKE schedules one pod per Cloud TPU node, and that pod uses all chips on that node. Two pods cannot share a single physical TPU chip. Consequently, attaching a TPU directly to a student's notebook holds an expensive node for the entire duration the browser tab remains open. For a class of 300 students, that would require 300 dedicated chips (~$405/hr on-demand).
 
 This repository decouples the notebook editor from accelerator execution:
 
@@ -28,7 +28,7 @@ This repository decouples the notebook editor from accelerator execution:
 [ TPU Batch Job ] (GKE Autopilot provisions ct5lp-hightpu-1t: 1x1 v5e)
 ```
 
-1. **The Notebook:** Each student gets a sandboxed JupyterLab pod running on low-cost Spot CPU nodes (~$0.02/hr). Students write, debug, and read assignments here.
+1. **The Notebook:** Each student gets a sandboxed JupyterLab pod running on low-cost Spot CPU nodes (~$0.015/vCPU-hr). Students write, debug, and read assignments here.
 2. **The Accelerator:** TPU work leaves the notebook as an ephemeral Kubernetes Job. [Kueue](https://kueue.sigs.k8s.io/) manages admission into a shared pool of v5e chips.
 3. **The Client Helper:** `notebooks/submit_tpu.py` submits the job, tracks its lifecycle, streams logs, and deletes the job upon completion.
 
@@ -55,7 +55,7 @@ A student holds a chip **only while their code runs** (typically 30–60 seconds
 ## 2. Tech Stack & Components (2026 Edition)
 
 - **Kubernetes Engine:** GKE Autopilot (Rapid Channel, version 1.36+).
-- **Admission Controller:** [Kueue v0.19.1](https://github.com/kubernetes-sigs/kueue) with Dynamic Workload Scheduler (DWS) flex and on-demand ResourceFlavors.
+- **Admission Controller:** [Kueue v0.19.1](https://github.com/kubernetes-sigs/kueue) with Dynamic Workload Scheduler (DWS) flex and on-demand ResourceFlavors in a unified cohort (`BestEffortFIFO`).
 - **JupyterHub:** [Zero-to-JupyterHub Helm Chart v4.4.1](https://hub.jupyter.org/helm-chart/) (JupyterHub App v5.5.1).
 - **Ingress & Security:** Google Cloud Identity-Aware Proxy (IAP), Google Front End (GFE) HTTPS Ingress (`spec.ingressClassName: "gce"`), Google-Managed SSL Certificates, and gVisor container sandboxing.
 - **Accelerator Architecture:** Google Cloud TPU v5e (`ct5lp-hightpu-1t` / `v5litepod-1`, topology `1x1`).
@@ -102,60 +102,46 @@ Once the Google-managed SSL certificate transitions to `Active` (typically 10–
 
 ---
 
-## 4. Operation & Testing Workflows
+## 4. Speed & Cold Start Analysis
 
-### Holding Warm TPU Nodes (Zero Cold-Start)
-Autopilot scales idle TPU nodes to zero after ~2 minutes. To eliminate the 2–4 minute node provision time for scheduled labs or office hours:
+A **warm pool** contains a TPU node that an earlier job left in place. A **cold pool** contains no active nodes, requiring GKE Autopilot to provision one from Compute Engine.
 
-```bash
-# Hold N chips warm ready (default 1 chip = $1.35/hr)
-make warm-on PROJECT=my-project WARM=1
-
-# Check warm pool status and live hourly burn rate
-bash scripts/07_warm_pool.sh status
-
-# Release warm nodes when done
-make warm-off PROJECT=my-project
-```
-
-*Note: An automatic guardrail CronJob (`tpu-warm-pool-auto-off`) scales the warm pool to 0 daily at 22:00 UTC.*
-
-### High-Concurrency Scale Testing
-Simulate 100 students submitting TPU jobs concurrently through a 32-chip pool:
-
-```bash
-make scale PROJECT=my-project STUDENTS=100 POOL_CHIPS=32 NS=cmu-idl
-make report
-```
-
-### End-of-Term Cleanup & Teardown
-Because student volumes use `reclaimPolicy: Retain` to protect student work from accidental deletion, use the cleanup utility to release persistent disks:
-
-```bash
-# Preview retained PVCs and disks (Dry Run)
-bash scripts/10_cleanup_pvcs.sh --dry-run PROJECT=my-project
-
-# Permanently delete PVCs and GCP persistent disks
-bash scripts/10_cleanup_pvcs.sh --execute PROJECT=my-project
-
-# Destroy cluster, queued resources, and static IPs
-make teardown PROJECT=my-project
-```
-
----
-
-## 5. Speed Benchmarks
-
-| Condition | Pod Scheduling Time | Total Job Completion |
-| :--- | :---: | :---: |
-| **Warm Pool Enabled (`make warm-on`)** | **+0 s** | **21 s** |
-| **Cold Pool (Node scale-up required)** | **120 s – 240 s** | **157 s – 261 s** |
+| Condition | Pod Scheduled | Job Finished | Notes |
+| :--- | :---: | :---: | :--- |
+| **Warm Pool Enabled (`make warm-on`)** | **+0 s** | **21 s** | Instant scheduling; node is ready. |
+| **Cold Pool (Autopilot Node scale-up)** | **120 s – 240 s** | **157 s – 261 s** | 2–4 min node build dominates latency. |
 
 *Hardware Initialization:* Every TPU container execution requires ~10s for JAX/XLA runtime and `libtpu` device discovery.
 
+### Understanding DWS Flex Zones vs. Cold Starts
+
+The repository configures two Kueue ResourceFlavors: `v5e-ondemand` and `v5e-flex`. The flex flavor targets nodes labeled `cloud.google.com/gke-flex-start: "true"`, which only exist where Google Cloud provides a v5e Dynamic Workload Scheduler (DWS) Flex pool.
+
+Measured on 2026-08-25 by submitting real `FLEX_START` requests:
+
+| Zone | Result | Impact |
+| :--- | :--- | :--- |
+| **`us-west4-a`** | **Accepted** | Full flex pool active; lowest cost and fast cold starts. |
+| `us-central1-a` | Rejected (Code 3: No flex pool) | All jobs fall back to on-demand capacity. |
+| `us-central1-b/c` | v5e not offered | 0 accelerator types available. |
+| `europe-west4-b` | Rejected (Code 3: No flex pool) | All jobs fall back to on-demand capacity. |
+
+Where no flex pool exists, the flex queue quota cannot place nodes and all work runs on on-demand capacity. Confirm during a run:
+
+```bash
+kubectl get nodes -l cloud.google.com/gke-flex-start=true
+```
+
+Always check by submitting a probe request rather than reading dashboard pool sizes:
+```bash
+gcloud alpha compute tpus queued-resources create probe --node-id=probe \
+  --zone=us-west4-a --accelerator-type=v5litepod-1 --runtime-version=v2-alpha-tpuv5-lite \
+  --provisioning-model=FLEX_START --max-run-duration=3600s
+```
+
 ---
 
-## 6. Cost Architecture & Budgeting
+## 5. Cost Architecture & Budgeting
 
 Rates based on `us-west4` on-demand pricing:
 
@@ -167,6 +153,10 @@ Rates based on `us-west4` on-demand pricing:
 | Autopilot Spot Pod Memory | ~$0.002 / GiB-hour | Notebook pod running |
 | GKE Cluster Management Fee | $0.10 / hour | Cluster exists |
 
+### Unit Costs
+- **One TPU run costs ~$0.040** (mean duration of 106s). A short 15s debug run costs **$0.006**.
+- **One open notebook costs ~$0.035/hr** on Spot (2 vCPU, 8 GiB) vs ~$0.289/hr on-demand (4 vCPU, 16 GiB).
+
 ### 100-Student Burst Cost Matrix (1-Hour Session)
 
 | Runs per Student | Concurrent Chips Active | TPU Cost | Notebook Pods (Spot) + Cluster | Total Cost |
@@ -176,11 +166,78 @@ Rates based on `us-west4` on-demand pricing:
 | 10 runs | 29 chips | $40.00 | $5.50 | **$45.50** |
 | 20 runs | 59 chips | $80.00 | $5.50 | **$85.50** |
 
+### Where the Cost Goes
+A notebook left open for hours without running code can cost more than several TPU executions. Three levers keep costs minimal:
+1. **Spot VMs for Notebooks:** Cuts CPU pod cost by 60–90%.
+2. **2 vCPU / 8 GiB Default Profile:** Halves notebook cost and doubles node-packing density.
+3. **Automated Idle Culling:** Inactivity culler in `k8s/jupyterhub-values.yaml` terminates idle sessions after 60 minutes (`maxAge: 28800` / 8h ceiling).
+
 ---
 
-## 7. Configuration Reference
+## 6. Capacity & Node Packing Math
 
-All options can be passed as `Makefile` arguments or shell environment variables:
+| Quota Metric | Default Limit | Source / Purpose |
+| :--- | :---: | :--- |
+| Concurrent Open Notebooks | ~374 | Regional `CPUS` quota (1500 default) |
+| Concurrent TPU Chips (On-Demand) | 512 | `TPU_LITE_PODSLICE_V5` quota |
+| Concurrent TPU Chips (Spot) | 1536 | `PREEMPTIBLE_TPU_LITE_PODSLICE_V5` |
+
+### Why Quota Math Requires Node-Packing Analysis
+Autopilot provisions an 8 vCPU node with ~7.9 vCPU allocatable. GKE system DaemonSets (CSI, logging, monitoring) consume ~2.6 vCPU, leaving room for exactly **two 2 vCPU notebooks per node**.
+- A quota of 1500 vCPU provisions 187 nodes $\rightarrow$ **~374 concurrent notebooks**.
+- *Caution:* Dividing 1500 by 2 vCPU = 750 ignores system pods and overstates capacity by 2x, resulting in node-evictions under peak load.
+
+### Multi-Region MultiKueue for Global Scheduling
+If regional TPU inventory stocks out during high-demand events, [MultiKueue](https://kueue.sigs.k8s.io/docs/concepts/multikueue/) can span the queue across clusters in multiple regions, dispatching jobs to wherever chips become available.
+
+---
+
+## 7. Scaling to 500 Students
+
+Scaling to 500 students requires only routine configuration adjustments:
+
+1. **Raise Regional `CPUS` Quota:** 500 notebooks at 2 per node require 250 nodes (2000 vCPU). Request 2400 in your region for headroom (free quota increase).
+2. **TPU Quotas Need No Change:** Default regional quota of 512 on-demand and 1536 Spot chips easily handles 500 students.
+3. **Storage Sizing:** 500 students × 10 GiB = 5 TB of `pd-balanced` storage (~$500/month across the term). Reclaim storage at term end using `scripts/10_cleanup_pvcs.sh`.
+
+```bash
+# Size the pool and sections (e.g. 500 students, 128 chips, 6 sections)
+POOL_CHIPS=128 SECTIONS="a b c d e f" make cluster PROJECT=my-project
+```
+
+### 300 vs 500 Student Comparison
+
+| Metric | Measured (300 Students) | Projected (500 Students) |
+| :--- | :---: | :---: |
+| Shared Chip Pool | 64 chips | 128 chips |
+| Wall Clock Queue Drain | 12.4 min (3.0 min burst) | ~3.0 min |
+| Total Chip-Hours | 8.84 | ~14.7 |
+| Total TPU Burst Cost | $11.93 | ~$19.80 |
+| **Cost Per Student** | **$0.040** | **$0.040** |
+
+---
+
+## 8. Measured Benchmark Results
+
+Conducted in `us-west4` with 4 lab sections sharing a single Kueue cohort:
+
+| Metric | Value |
+| :--- | :---: |
+| Total Students | 300 |
+| Completed Workloads | 300 (100% success, 0 failed) |
+| Maximum Concurrent TPU Chips | 64 |
+| Total Wall Clock Duration | 12.4 min |
+| Queue Wait Time (p50 / p95) | 270 s / 487 s |
+| Node Build & Image Pull (p50 / p95) | 23 s / 74 s |
+| Job Execution Duration (p50) | 52 s |
+| Total Chip-Hours Consumed | 8.84 |
+| Concurrent Hub Spawns (50 users) | 50/50 Ready (p50: 137s, p95: 191s) |
+
+---
+
+## 9. Configuration & JupyterHub Profiles
+
+### Makefile & Environment Variables
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
@@ -191,13 +248,71 @@ All options can be passed as `Makefile` arguments or shell environment variables
 | `POOL_CHIPS` | `32` | Total v5e capacity shared across queues. |
 | `WARM` | `1` | Number of warm placeholder chips to hold. |
 | `DOMAIN` | `<IP>.nip.io` | Custom domain name for IAP HTTPS Ingress. |
-| `STUDENT_GROUP` | *Optional* | Google Group email for enrolled students (e.g. `group:students@cmu.edu`). |
-| `TA_GROUP` | *Optional* | Google Group email for course TAs (e.g. `group:tas@cmu.edu`). |
-| `ADMIN_USERS` | *Optional* | Space/comma-separated admin emails (e.g. `user:instructor@cmu.edu`). |
+| `STUDENT_GROUP` | *Optional* | Google Group for enrolled students (`group:students@cmu.edu`). |
+| `TA_GROUP` | *Optional* | Google Group for course TAs (`group:tas@cmu.edu`). |
+| `ADMIN_USERS` | *Optional* | Admin user emails (`user:instructor@cmu.edu`). |
+
+### JupyterHub Profile Options (`k8s/jupyterhub-values.yaml`)
+
+| Profile Name | Resource Allocation | Intended Audience |
+| :--- | :--- | :--- |
+| **Course default — CPU notebook** | 2 vCPU, 8 GiB RAM (Spot VM, gVisor) | All Students (interactive coding & TPU submission) |
+| **Large CPU notebook** | 8 vCPU, 32 GiB RAM (Spot VM, gVisor) | Students (dataset preprocessing, tokenization) |
+| **Pinned TPU v5e notebook** | 1 v5e chip attached directly ($1.35/hr) | Staff Only (`allowed_groups: [staff]`) |
 
 ---
 
-## 8. Repository File Structure
+## 10. Operations, Warm Pool & Maintenance
+
+### Managing Warm TPU Node Placeholders
+```bash
+# Hold 1 warm chip ready ($1.35/hr)
+make warm-on PROJECT=my-project WARM=1
+
+# Check status and running burn rate
+bash scripts/07_warm_pool.sh status
+
+# Release placeholders
+make warm-off PROJECT=my-project
+```
+*Guardrail:* The `tpu-warm-pool-auto-off` CronJob automatically releases warm nodes daily at 22:00 UTC.
+
+### Storage Reclamation & Full Teardown
+```bash
+# Preview retained PVCs & persistent disks
+make clean-pvcs-dry-run PROJECT=my-project
+
+# Permanently delete retained PVCs & GCP disks
+make clean-pvcs PROJECT=my-project
+
+# Destroy cluster, queued resources, and static IPs
+make teardown PROJECT=my-project
+```
+
+---
+
+## 11. Adapting for Other TPU Generations (e.g. v6e / v4)
+
+To switch from TPU v5e (`v5litepod-1` / `ct5lp-hightpu-1t`) to another generation:
+
+| Target File | Required Update |
+| :--- | :--- |
+| [`k8s/student-tpu-job.yaml`](k8s/student-tpu-job.yaml) | Update `nodeSelector` accelerator and topology labels. |
+| [`notebooks/submit_tpu.py`](notebooks/submit_tpu.py) | Update `node_selector` in the client Job builder. |
+| [`k8s/kueue-tpu-queues.yaml`](k8s/kueue-tpu-queues.yaml) | Update `nodeLabels` on all ResourceFlavors. |
+| [`k8s/tpu-warm-pool.yaml`](k8s/tpu-warm-pool.yaml) | Update `nodeSelector` labels on the placeholder Deployment. |
+| [`scripts/05_report.py`](scripts/05_report.py) | Update `CHIP_HR` rate for accurate billing reports. |
+
+Find all references in one command:
+```bash
+grep -rn "tpu-v5-lite-podslice" k8s/ notebooks/
+```
+
+Confirm regional quota for the target generation via `make preflight` before modifying manifests.
+
+---
+
+## 12. Repository Layout
 
 ```
 shared-tpu-notebooks/
@@ -233,6 +348,6 @@ shared-tpu-notebooks/
 
 ---
 
-## 9. License
+## 13. License
 
 Apache 2.0. See [`LICENSE`](LICENSE) for details.
