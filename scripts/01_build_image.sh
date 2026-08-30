@@ -44,9 +44,14 @@ POLICY
     --repository-format=docker \
     --location="${REGION}" \
     --description="Docker repository for course images" \
-    --cleanup-policy-dry-run=false \
-    --cleanup-policies="${CLEANUP_POLICY}" \
     --project="${PROJECT}"
+
+  echo "    applying cleanup policies..."
+  gcloud artifacts repositories set-cleanup-policies course-images \
+    --location="${REGION}" \
+    --project="${PROJECT}" \
+    --policy="${CLEANUP_POLICY}" \
+    --no-dry-run
 fi
 
 echo "==> configuring docker auth for Artifact Registry"
