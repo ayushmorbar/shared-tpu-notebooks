@@ -66,13 +66,13 @@ metadata:
   name: hub-ingress
   namespace: __NAMESPACE__
   annotations:
-    kubernetes.io/ingress.class: "gce"
     kubernetes.io/ingress.global-static-ip-name: tpu-notebooks-ip
     networking.gke.io/managed-certificates: hub-cert
     # IAP needs HTTPS. Leave HTTP enabled so the managed certificate can complete its
     # HTTP-01 style validation; once the cert is ACTIVE you can set this to "true".
     kubernetes.io/ingress.allow-http: "true"
 spec:
+  ingressClassName: "gce"
   defaultBackend:
     service:
       name: proxy-public
