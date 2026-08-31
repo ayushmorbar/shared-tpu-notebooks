@@ -36,11 +36,22 @@ TPU_TOPOLOGY = os.environ.get("TPU_TOPOLOGY", "1x1")
 
 
 class JobInterrupted(RuntimeError):
-    """The job went away before it could run. Nothing executed; re-running is safe."""
+    """The job went away before it could run.
+    
+    This exception is raised when the job is deleted from the cluster 
+    (e.g., via TTL or manual deletion) before it was admitted or finished.
+    Nothing executed; re-running is safe.
+    """
 
 
 def _delete(batch: "client.BatchV1Api", name: str, ns: str) -> None:
-    """Delete a Job, tolerating the case where it is already gone."""
+    """Delete a Job, tolerating the case where it is already gone.
+
+    Args:
+        batch (client.BatchV1Api): The initialized Kubernetes Batch V1 API client.
+        name (str): The name of the Job to delete.
+        ns (str): The namespace where the Job resides.
+    """
     try:
         batch.delete_namespaced_job(name, ns, propagation_policy="Background")
     except ApiException as e:
@@ -49,7 +60,11 @@ def _delete(batch: "client.BatchV1Api", name: str, ns: str) -> None:
 
 
 def _namespace() -> str:
-    """The namespace this notebook pod runs in."""
+    """Get the namespace this notebook pod runs in.
+
+    Returns:
+        str: The Kubernetes namespace string. Defaults to "default" if unresolvable.
+    """
     path = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
     if os.path.exists(path):
         with open(path) as fh:
@@ -58,6 +73,11 @@ def _namespace() -> str:
 
 
 def _load() -> None:
+    """Load the Kubernetes configuration.
+    
+    Attempts to load the in-cluster config first, falling back to a local
+    kubeconfig file if running outside a cluster.
+    """
     try:
         config.load_incluster_config()
     except config.ConfigException:
@@ -65,15 +85,28 @@ def _load() -> None:
 
 
 def run(code: str, timeout: int = 28800, keep: bool = False) -> str:
-    """Run `code` on one v5e chip. Blocks until it finishes. Returns stdout.
+    """Run code on one v5e chip. Blocks until it finishes and returns stdout.
 
-    timeout covers the whole wait: queue time plus node provisioning plus the run.
-    A cold chip can take several minutes to arrive, which is normal and is why the
-    function prints its state transitions rather than sitting silent.
+    The timeout covers the entire wait: queue time plus node provisioning 
+    plus the actual execution run. A cold chip can take several minutes to 
+    arrive, which is normal.
 
     The job name is deterministic (one per student). If a previous job with the
     same name is still running, the create call will fail with 409 Conflict,
     which prevents a student from hogging multiple chips at once.
+
+    Args:
+        code (str): The python code to execute on the TPU.
+        timeout (int, optional): The maximum time in seconds to wait. Defaults to 28800 (8 hours).
+        keep (bool, optional): Whether to keep the Job object around after execution instead of deleting it. Defaults to False.
+
+    Returns:
+        str: The standard output logs from the pod execution.
+
+    Raises:
+        JobInterrupted: If the job is deleted from the cluster while waiting.
+        RuntimeError: If the job execution fails.
+        TimeoutError: If the job does not complete within the timeout.
     """
     _load()
     ns = _namespace()

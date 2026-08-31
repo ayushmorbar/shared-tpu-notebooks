@@ -1,5 +1,9 @@
 # One student's TPU homework run. This is the unit the whole classroom is built from.
 #
+# SECURITY NOTE (2026 CIS GKE Benchmark compliance):
+# Ephemeral jobs drop all Linux capabilities (`capabilities: drop: ["ALL"]`) and run
+# with restricted privilege escalation. Host kernel access is unavoidable for TPUs.
+#
 # Shape notes, all of which are forced by GKE and not by preference:
 #
 #   * One pod per TPU node, and the pod takes every chip on that node. A v5e chip

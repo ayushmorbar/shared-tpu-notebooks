@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Delete everything and prove nothing is still billing.
+# ==============================================================================
+# Script: 99_teardown.sh
+# Description: Delete everything and prove nothing is still billing.
 #
 # The verification at the end is not decoration. A TPU node left Ready is $1.20/hr,
 # and a queued resource left in ACTIVE bills the same whether or not anyone is using
+# ==============================================================================
 # it. Both survive a casual "I deleted the cluster".
 source "$(dirname "$0")/common.sh"
 require_project

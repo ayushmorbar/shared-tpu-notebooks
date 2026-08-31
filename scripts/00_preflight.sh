@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Preflight for a university TPU classroom. Read-only: nothing here costs money.
+# ==============================================================================
+# Script: 00_preflight.sh
+# Description: Preflight for a university TPU classroom. Read-only: nothing here costs money.
 #
 # Answers, per region, the three questions that gate a v5e classroom before
 # capacity is ever in play:
@@ -16,6 +18,11 @@
 #                            consume, including for a single chip (v5litepod-1 / 1x1).
 #
 # Asking support to raise Device quota when you needed PodSlice is a wasted round trip.
+#
+# Usage:
+#   make preflight PROJECT=my-project-id
+# ==============================================================================
+
 source "$(dirname "$0")/common.sh"
 require_project
 check_prereqs gcloud

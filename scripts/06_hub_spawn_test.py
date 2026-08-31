@@ -27,11 +27,24 @@ PROFILE = "course-default-cpu-notebook"
 
 
 def sh(*args: str) -> str:
+    """Execute a shell command and return its stripped standard output.
+
+    Args:
+        *args (str): The command and its arguments.
+
+    Returns:
+        str: The standard output of the command.
+    """
     r = subprocess.run(args, capture_output=True, text=True)
     return r.stdout.strip()
 
 
 def hub_pod() -> str:
+    """Retrieve the name of the JupyterHub core pod in the namespace.
+
+    Returns:
+        str: The name of the hub pod.
+    """
     return sh(
         "kubectl", "-n", NS, "get", "pod", "-l", "component=hub",
         "-o", "jsonpath={.items[0].metadata.name}",
@@ -39,6 +52,18 @@ def hub_pod() -> str:
 
 
 def api(hub: str, token: str, method: str, path: str, body: str | None = None) -> str:
+    """Make an authenticated REST API call to the JupyterHub pod via kubectl exec.
+
+    Args:
+        hub (str): The name of the JupyterHub pod.
+        token (str): The API token to authenticate the request.
+        method (str): The HTTP method (e.g., "GET", "POST").
+        path (str): The API endpoint path (e.g., "/users/student1").
+        body (str | None, optional): The JSON payload. Defaults to None.
+
+    Returns:
+        str: The raw HTTP response body.
+    """
     cmd = [
         "kubectl", "-n", NS, "exec", hub, "--",
         "curl", "-s", "-X", method,
@@ -52,6 +77,15 @@ def api(hub: str, token: str, method: str, path: str, body: str | None = None) -
 
 
 def pct(xs: list[float], p: float) -> float:
+    """Calculate the p-th percentile of a list of floats.
+
+    Args:
+        xs (list[float]): The input list of floats.
+        p (float): The percentile to calculate (0.0 to 1.0).
+
+    Returns:
+        float: The interpolated value at the requested percentile, or NaN if the list is empty.
+    """
     if not xs:
         return float("nan")
     xs = sorted(xs)
@@ -61,6 +95,11 @@ def pct(xs: list[float], p: float) -> float:
 
 
 def main() -> int:
+    """Execute the concurrent hub spawn load test.
+
+    Returns:
+        int: The exit code (0 for success).
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--users", type=int, default=50)
     ap.add_argument("--timeout", type=int, default=1800)

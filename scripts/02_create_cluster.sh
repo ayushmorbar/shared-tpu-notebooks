@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Stand up the classroom substrate: Autopilot cluster, Kueue, section queues.
+# ==============================================================================
+# Script: 02_create_cluster.sh
+# Description: Stand up the classroom substrate: Autopilot cluster, Kueue, section queues.
 # Idempotent -- safe to re-run.
 #
 # Autopilot, not Standard, on purpose. Autopilot provisions a ct5lp-hightpu-1t node
+# ==============================================================================
 # per TPU pod from the two nodeSelector labels and scales back to zero when the pod
 # ends. Standard would need a node pool per topology plus the cluster autoscaler, and
 # ai-infra-demo-2026-05/capacity/README.md:127 records why that is worse on tight

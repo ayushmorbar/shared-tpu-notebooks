@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
-# Build and push the custom course Docker image.
+# ==============================================================================
+# Script: 01_build_image.sh
+# Description: Build and push the custom course Docker image.
 #
 # We inherit from the standard scipy-notebook and bake in the kubernetes client.
 # This saves several seconds on every student pod's cold start compared to running
 # a pip install in a postStart lifecycle hook.
+#
+# Usage:
+#   make image
+# ==============================================================================
+
 source "$(dirname "$0")/common.sh"
 require_project
 check_prereqs gcloud docker

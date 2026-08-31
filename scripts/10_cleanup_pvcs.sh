@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Clean up JupyterHub PVCs and their underlying GCP disks at the end of the term.
+# ==============================================================================
+# Script: 10_cleanup_pvcs.sh
+# Description: Clean up JupyterHub PVCs and their underlying GCP disks at the end of the term.
 #
 # Because the StorageClass uses `reclaimPolicy: Retain`, deleting the PVC or the
 # namespace will leave the underlying GCP disk intact and continuing to bill.
+# ==============================================================================
 # This script safely deletes the PVCs, the Released PVs, and the actual GCP disks.
 #
 # Usage:

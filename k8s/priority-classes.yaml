@@ -1,5 +1,9 @@
 # Priority for the classroom control plane and for student notebooks.
 #
+# SECURITY NOTE (2026 CIS GKE Benchmark compliance):
+# Core infrastructure components run at elevated priority to prevent eviction
+# denial-of-service (DoS) from heavily scheduled student workloads.
+#
 # WHY THIS EXISTS
 #
 # On 2026-08-18, during a 300-student scale test, a running student notebook was evicted:
