@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Turn warm TPU nodes on and off.
+# ==============================================================================
+# Script: 07_warm_pool.sh
+# Description: Turn warm TPU nodes on and off.
 #
 #   bash 07_warm_pool.sh on [N]   hold N chips warm (default 4)
 #   bash 07_warm_pool.sh off      release them
+# ==============================================================================
 #   bash 07_warm_pool.sh status   what's warm and what it's costing
 #
 # Warm chips bill continuously. Leaving this on overnight is the expensive mistake, so

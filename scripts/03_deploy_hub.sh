@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Install JupyterHub and give student notebooks permission to submit TPU Jobs.
+# ==============================================================================
+# Script: 03_deploy_hub.sh
+# Description: Install JupyterHub and give student notebooks permission to submit TPU Jobs.
 #
 # The RBAC below is the security boundary of the classroom. A student notebook can
 # create, watch and delete Jobs in its own namespace and read their logs. It cannot
+# ==============================================================================
 # touch another namespace, cannot create a Job with a node selector of its choosing
 # outside what the pod template allows, and cannot edit the ClusterQueue that caps
 # the pool. Student code is untrusted; treat it that way.

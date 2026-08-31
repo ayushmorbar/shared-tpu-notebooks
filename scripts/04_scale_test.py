@@ -39,6 +39,18 @@ RESULTS = HERE.parent / "results"
 
 
 def kubectl(*args: str, check: bool = True) -> str:
+    """Run a kubectl command and return its standard output.
+
+    Args:
+        *args (str): The arguments to pass to the kubectl command.
+        check (bool, optional): Whether to raise an exception if the command fails. Defaults to True.
+
+    Returns:
+        str: The standard output of the command.
+
+    Raises:
+        RuntimeError: If check is True and the command exits with a non-zero status.
+    """
     r = subprocess.run(
         ["kubectl", *args], capture_output=True, text=True, check=False
     )
@@ -48,6 +60,14 @@ def kubectl(*args: str, check: bool = True) -> str:
 
 
 def parse_ts(s: str | None) -> float | None:
+    """Parse a Kubernetes ISO 8601 timestamp string into a Unix epoch float.
+
+    Args:
+        s (str | None): The timestamp string (e.g., "2026-09-01T12:00:00Z").
+
+    Returns:
+        float | None: The timestamp in seconds since the epoch, or None if the input is None.
+    """
     if not s:
         return None
     return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(
@@ -56,7 +76,15 @@ def parse_ts(s: str | None) -> float | None:
 
 
 def submit(students: int, namespace: str) -> list[dict]:
-    """Create every student Job up front. The stampede is the point of the test."""
+    """Create every student Job up front to simulate a stampede.
+
+    Args:
+        students (int): The number of concurrent student jobs to simulate.
+        namespace (str): The Kubernetes namespace to submit jobs into.
+
+    Returns:
+        list[dict]: A list of dictionaries tracking each student's job metadata.
+    """
     template = JOB_TEMPLATE.read_text()
     roster = []
     batch = []
@@ -92,7 +120,15 @@ def submit(students: int, namespace: str) -> list[dict]:
 
 
 def collect(roster: list[dict], timeout: int) -> list[dict]:
-    """Poll Kueue Workloads and Jobs until every student is done or time runs out."""
+    """Poll Kueue Workloads and Jobs until every student is done or time runs out.
+
+    Args:
+        roster (list[dict]): The initial roster of student jobs created by submit().
+        timeout (int): The maximum number of seconds to wait for completion.
+
+    Returns:
+        list[dict]: The updated roster containing full timestamp progression for each job.
+    """
     by_name = {r["student"]: dict(r) for r in roster}
     t0 = time.time()
     concurrency = []  # (t, running) samples, for utilisation
@@ -154,6 +190,14 @@ def collect(roster: list[dict], timeout: int) -> list[dict]:
 
 
 def main() -> int:
+    """Execute the scale test runner.
+
+    Parses command-line arguments, generates the workload stampede, 
+    collects the progression data, and writes a JSONL report to disk.
+
+    Returns:
+        int: The exit code (0 for success).
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--students", type=int, default=100)
     ap.add_argument("--chips", type=int, default=32)

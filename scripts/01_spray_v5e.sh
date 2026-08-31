@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# v5e sibling of ai-infra-demo-2026-05/capacity/flex_spray_tpu.sh.
+# ==============================================================================
+# Script: 01_spray_v5e.sh
+# Description: v5e sibling of ai-infra-demo-2026-05/capacity/flex_spray_tpu.sh.
 #
 # WHY THIS EXISTS RATHER THAN CALLING THAT SCRIPT
-#
+# ==============================================================================
 # flex_spray_tpu.sh guards its flex zone list only when ACCEL=v6e-*:
 #
 #     if [[ "$MODE" == "flex" && "$ACCEL" == v6e-* ]]; then ZONES="${V6E_FLEX_ZONES}"

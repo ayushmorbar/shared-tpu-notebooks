@@ -25,6 +25,15 @@ CHIP_HR = 1.35
 
 
 def pct(xs: list[float], p: float) -> float:
+    """Calculate the p-th percentile of a list of floats.
+
+    Args:
+        xs (list[float]): The input list of floats.
+        p (float): The percentile to calculate (0.0 to 1.0).
+
+    Returns:
+        float: The interpolated value at the requested percentile, or NaN if the list is empty.
+    """
     if not xs:
         return float("nan")
     xs = sorted(xs)
@@ -34,6 +43,11 @@ def pct(xs: list[float], p: float) -> float:
 
 
 def main() -> int:
+    """Read a scale-test JSONL and output a markdown formatted metrics table.
+
+    Returns:
+        int: The exit code (0 for success, 1 on error).
+    """
     if len(sys.argv) > 1:
         path = pathlib.Path(sys.argv[1])
     else:

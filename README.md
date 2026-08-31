@@ -70,6 +70,9 @@ A student holds a chip **only while their code runs** (typically 30–60 seconds
 - Command-line tools: `gcloud`, `kubectl`, `helm`, `make`, and `docker` (if building custom images).
 - Authenticated `gcloud` session: `gcloud auth login` and `gcloud auth application-default login`.
 
+> [!TIP]
+> For a detailed, step-by-step walkthrough, please read the [Getting Started Guide](docs/getting_started.md). For architectural details, see the [Architecture Document](docs/architecture.md).
+
 ### Step-by-Step Deployment
 
 ```bash

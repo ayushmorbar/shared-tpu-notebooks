@@ -27,20 +27,25 @@ export PROJECT REGION CLUSTER NS NAMESPACE=$(NS) STUDENTS POOL_CHIPS WARM DOMAIN
 
 .PHONY: check preflight cluster image hub iap warm-on warm-off demo smoke scale report clean-pvcs clean-pvcs-dry-run teardown venv help
 
+# Ensure the PROJECT variable is set before proceeding.
 check:
 ifndef PROJECT
 	$(error PROJECT is not set. Set it in config.env or run: make $(MAKECMDGOALS) PROJECT=my-gcp-project)
 endif
 
+# Run the regional quota and availability preflight script.
 preflight: check
 	bash scripts/00_preflight.sh
 
+# Build and push the custom Jupyter course image to Artifact Registry.
 image: check
 	bash scripts/01_build_image.sh
 
+# Provision the GKE Autopilot cluster, Kueue configurations, and StorageClasses.
 cluster: check
 	bash scripts/02_create_cluster.sh
 
+# Deploy JupyterHub using Helm and configure student RBAC.
 hub: check
 	bash scripts/03_deploy_hub.sh
 
@@ -63,20 +68,25 @@ iap: check
 warm-on: check
 	bash scripts/07_warm_pool.sh on $(WARM)
 
+# Release any warm placeholder TPU chips to stop billing.
 warm-off: check
 	bash scripts/07_warm_pool.sh off
 
+# Full automated demo: Create cluster, deploy hub, and run smoke test.
 demo: cluster hub smoke
 	@echo
 	@echo "Put the hub behind HTTPS and Google sign-in:  make iap PROJECT=$(PROJECT)"
 
+# Create a python virtual environment for local scripts.
 venv:
 	python3 -m venv .venv && ./.venv/bin/pip install --quiet --upgrade pip
 
+# Run the concurrency scale test.
 scale: check venv
 	./.venv/bin/python scripts/04_scale_test.py --students $(STUDENTS) --chips $(POOL_CHIPS) --namespace $(NS)
 	./.venv/bin/python scripts/05_report.py
 
+# Generate an analytics markdown report from the latest scale test run.
 report: venv
 	./.venv/bin/python scripts/05_report.py
 
@@ -87,6 +97,7 @@ clean-pvcs-dry-run: check
 clean-pvcs: check
 	bash scripts/10_cleanup_pvcs.sh --execute
 
+# Fully destroy the cluster, queued resources, static IPs, and stop all billing.
 teardown: check
 	bash scripts/99_teardown.sh
 

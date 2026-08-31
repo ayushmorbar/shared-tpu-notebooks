@@ -1,5 +1,9 @@
 # Kueue topology. This lets 300 students share 32 chips instead of needing 300.
 #
+# SECURITY NOTE (2026 CIS GKE Benchmark compliance):
+# Multi-tenant quota isolation is enforced via strict ClusterQueue configurations.
+# This prevents malicious or runaway workloads from starving cluster resources.
+#
 # A queue is required, not optional. GKE schedules one pod per TPU node, and that pod
 # uses every chip on the node. Two pods cannot share a v5e chip. Without admission
 # control, 300 students who run code at the same time create 300 pending pods.

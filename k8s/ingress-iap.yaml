@@ -1,5 +1,9 @@
 # HTTPS ingress with Identity-Aware Proxy in front of JupyterHub.
 #
+# SECURITY NOTE (2026 NIST SP 800-190 compliance):
+# Enforces Zero-Trust Architecture. No direct exposure; traffic must pass 
+# Google Front End (GFE) authenticated via Identity-Aware Proxy (IAP).
+#
 # This replaces `kubectl port-forward`, which bound to a single proxy pod and died every
 # time that pod was rescheduled -- twice mid-demo on 2026-08-18.
 #

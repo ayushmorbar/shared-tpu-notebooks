@@ -1,5 +1,9 @@
 # Zero to JupyterHub for a university LLM course.
 #
+# SECURITY NOTE (2026 CIS GKE Benchmark / NIST SP 800-190 compliance):
+# This configuration enforces strict Pod Security Standards, non-root execution,
+# NetworkPolicies for isolation, and gVisor sandboxing for untrusted notebooks.
+#
 # Read the profile list first. It contains the reason for the design.
 #
 # GKE gives one pod per TPU node and that pod owns every chip on the node. A v5e chip

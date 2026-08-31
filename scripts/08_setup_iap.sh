@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Put JupyterHub behind HTTPS and Identity-Aware Proxy.
+# ==============================================================================
+# Script: 08_setup_iap.sh
+# Description: Put JupyterHub behind HTTPS and Identity-Aware Proxy.
 #
 # After this, the hub has a real URL and Google sign-in. No port-forward, no tunnel to
 # babysit, and nothing that dies when the proxy pod moves.
+# ==============================================================================
 #
 # WHY THIS WORKS IN AN ORG THAT BLOCKS L4 LOAD BALANCERS
 #
