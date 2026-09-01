@@ -27,10 +27,10 @@ warm_nodes() {
 
 case "${ACTION}" in
   on)
-    N="${2:-${DEFAULT_REPLICAS}}"
+    N="${2:-${WARM}}"
     # Apply the manifest first so a fresh cluster works without running anything else.
     sed "s|__NAMESPACE__|${NAMESPACE}|g" "$(dirname "$0")/../k8s/tpu-warm-pool.yaml" \
-      | kubectl --context="${CTX}" apply -f - >/dev/null
+      | kubectl --context="${GKE_CTX}" apply -f - >/dev/null
     "${K[@]}" scale deployment/tpu-warm-pool --replicas="${N}" >/dev/null
     COST=$(awk -v n="${N}" -v c="${CHIP_HR}" 'BEGIN{printf "%.2f", n*c}')
     DAY=$(awk -v n="${N}" -v c="${CHIP_HR}" 'BEGIN{printf "%.0f", n*c*24}')
