@@ -131,7 +131,8 @@ spec:
     count/jobs.batch: "250"
     count/pods: "500"
     count/persistentvolumeclaims: "300"
-    requests.storage: "500Gi"
+    # 300 home volumes x 32Gi. 500Gi was already below 300 x 10Gi.
+    requests.storage: "10Ti"
 ---
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: LocalQueue
@@ -190,7 +191,7 @@ EOF
 #     count/jobs.batch: "250"
 #     count/pods: "500"
 #     count/persistentvolumeclaims: "300"
-#     requests.storage: "500Gi"
+#     requests.storage: "10Ti"
 # ---
 # apiVersion: kueue.x-k8s.io/v1beta2
 # kind: LocalQueue

@@ -19,7 +19,7 @@ This repository decouples the notebook editor from accelerator execution:
 [ JupyterHub Proxy & Hub Pods ] (cmu-idl namespace)
        │  (Spawns on demand)
        ▼
-[ CPU-Only Notebook Pod ] (2 vCPU, 8 GiB RAM, Spot VM, gVisor sandboxed)
+[ CPU-Only Notebook Pod ] (2 vCPU, 16 GiB RAM, 32 GiB home disk, Spot VM, gVisor sandboxed)
        │  (Student writes code & runs submit_tpu.run(...))
        ▼
 [ Kueue Admission Controller ] (ClusterQueue: shared-tpu-pool, 32-128 chips)
@@ -158,21 +158,21 @@ Rates based on `us-west4` on-demand pricing:
 
 ### Unit Costs
 - **One TPU run costs ~$0.040** (mean duration of 106s). A short 15s debug run costs **$0.006**.
-- **One open notebook costs ~$0.035/hr** on Spot (2 vCPU, 8 GiB) vs ~$0.289/hr on-demand (4 vCPU, 16 GiB).
+- **One open notebook costs ~$0.06/hr** on Spot (2 vCPU, 16 GiB) vs ~$0.289/hr on-demand (4 vCPU, 16 GiB).
 
 ### 100-Student Burst Cost Matrix (1-Hour Session)
 
 | Runs per Student | Concurrent Chips Active | TPU Cost | Notebook Pods (Spot) + Cluster | Total Cost |
 | :---: | :---: | :---: | :---: | :---: |
-| 2 runs | 6 chips | $8.00 | $5.50 | **$13.50** |
-| 5 runs | 15 chips | $20.00 | $5.50 | **$25.50** |
-| 10 runs | 29 chips | $40.00 | $5.50 | **$45.50** |
-| 20 runs | 59 chips | $80.00 | $5.50 | **$85.50** |
+| 2 runs | 6 chips | $8.00 | $6.50 | **$14.50** |
+| 5 runs | 15 chips | $20.00 | $6.50 | **$26.50** |
+| 10 runs | 29 chips | $40.00 | $6.50 | **$46.50** |
+| 20 runs | 59 chips | $80.00 | $6.50 | **$86.50** |
 
 ### Where the Cost Goes
 A notebook left open for hours without running code can cost more than several TPU executions. Three levers keep costs minimal:
 1. **Spot VMs for Notebooks:** Cuts CPU pod cost by 60–90%.
-2. **2 vCPU / 8 GiB Default Profile:** Halves notebook cost and doubles node-packing density.
+2. **2 vCPU / 16 GiB Default Profile:** Headroom for interactive JAX next to a memmap'd disk cache, without promoting onto a memory-optimized SKU.
 3. **Automated Idle Culling:** Inactivity culler in `k8s/jupyterhub-values.yaml` terminates idle sessions after 60 minutes (`maxAge: 28800` / 8h ceiling).
 
 ---
@@ -181,14 +181,14 @@ A notebook left open for hours without running code can cost more than several T
 
 | Quota Metric | Default Limit | Source / Purpose |
 | :--- | :---: | :--- |
-| Concurrent Open Notebooks | ~374 | Regional `CPUS` quota (1500 default) |
+| Concurrent Open Notebooks | ~187 | Regional `CPUS` quota (1500 default), memory-bound at 16 GiB |
 | Concurrent TPU Chips (On-Demand) | 512 | `TPU_LITE_PODSLICE_V5` quota |
 | Concurrent TPU Chips (Spot) | 1536 | `PREEMPTIBLE_TPU_LITE_PODSLICE_V5` |
 
 ### Why Quota Math Requires Node-Packing Analysis
-Autopilot provisions an 8 vCPU node with ~7.9 vCPU allocatable. GKE system DaemonSets (CSI, logging, monitoring) consume ~2.6 vCPU, leaving room for exactly **two 2 vCPU notebooks per node**.
-- A quota of 1500 vCPU provisions 187 nodes $\rightarrow$ **~374 concurrent notebooks**.
-- *Caution:* Dividing 1500 by 2 vCPU = 750 ignores system pods and overstates capacity by 2x, resulting in node-evictions under peak load.
+Autopilot provisions an 8 vCPU / ~32 GiB node with ~7.9 vCPU allocatable. GKE system DaemonSets (CSI, logging, monitoring) consume ~2.6 vCPU and several GiB of RAM. CPU would still fit two 2 vCPU notebooks, but **16 GiB RAM fits only one notebook per node**.
+- A quota of 1500 vCPU provisions 187 nodes $\rightarrow$ **~187 concurrent notebooks**.
+- *Caution:* Dividing 1500 by 2 vCPU = 750 ignores both system pods and the memory ceiling, and overstates capacity by 4x.
 
 ### Multi-Region MultiKueue for Global Scheduling
 If regional TPU inventory stocks out during high-demand events, [MultiKueue](https://kueue.sigs.k8s.io/docs/concepts/multikueue/) can span the queue across clusters in multiple regions, dispatching jobs to wherever chips become available.
@@ -199,9 +199,9 @@ If regional TPU inventory stocks out during high-demand events, [MultiKueue](htt
 
 Scaling to 500 students requires only routine configuration adjustments:
 
-1. **Raise Regional `CPUS` Quota:** 500 notebooks at 2 per node require 250 nodes (2000 vCPU). Request 2400 in your region for headroom (free quota increase).
+1. **Raise Regional `CPUS` Quota:** 500 notebooks at 1 per node (16 GiB RAM) require 500 nodes. Request 2400+ vCPU in your region for DaemonSet overhead (free quota increase).
 2. **TPU Quotas Need No Change:** Default regional quota of 512 on-demand and 1536 Spot chips easily handles 500 students.
-3. **Storage Sizing:** 500 students × 10 GiB = 5 TB of `pd-balanced` storage (~$500/month across the term). Reclaim storage at term end using `scripts/10_cleanup_pvcs.sh`.
+3. **Storage Sizing:** 500 students × 32 GiB = 16 TB of `pd-balanced` storage (~$1,600/month across the term). The 32 GiB home volume is what lets a disk-cache of a 112x112 train split (~16 GiB) finish without filling the PVC. Reclaim storage at term end using `scripts/10_cleanup_pvcs.sh`.
 
 ```bash
 # Size the pool and sections (e.g. 500 students, 128 chips, 6 sections)
@@ -259,7 +259,7 @@ Conducted in `us-west4` with 4 lab sections sharing a single Kueue cohort:
 
 | Profile Name | Resource Allocation | Intended Audience |
 | :--- | :--- | :--- |
-| **Course default — CPU notebook** | 2 vCPU, 8 GiB RAM (Spot VM, gVisor) | All Students (interactive coding & TPU submission) |
+| **Course default — CPU notebook** | 2 vCPU, 16 GiB RAM, 32 GiB home disk (Spot VM, gVisor) | All Students (interactive coding & TPU submission) |
 | **Large CPU notebook** | 8 vCPU, 32 GiB RAM (Spot VM, gVisor) | Students (dataset preprocessing, tokenization) |
 | **Pinned TPU v5e notebook** | 1 v5e chip attached directly ($1.35/hr) | Staff Only (`allowed_groups: [staff]`) |
 

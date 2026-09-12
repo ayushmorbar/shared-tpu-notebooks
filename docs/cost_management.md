@@ -1,12 +1,12 @@
 # 💰 Cost Management & Budgeting
 
-Running TPUs for hundreds of students can drain a budget rapidly if mismanaged. This repository is architected to keep costs below **$0.05 per student per session**.
+Running TPUs for hundreds of students can drain a budget rapidly if mismanaged. This repository is architected to keep costs below **$0.10 per student per session**.
 
 ## Where the Money Goes
 
 In a GKE Autopilot cluster, you pay for what pods *request*, not what the underlying VM nodes have.
 
-1. **The Notebook Pod (CPU):** A 2 vCPU, 8 GiB RAM pod.
+1. **The Notebook Pod (CPU):** A 2 vCPU, 16 GiB RAM pod with a 32 GiB home disk.
 2. **The TPU Job:** A `ct5lp-hightpu-1t` node carrying 1x v5e chip.
 3. **Cluster Management Fee:** $0.10/hour per cluster.
 
@@ -16,7 +16,7 @@ We aggressively use Spot VMs for the Jupyter notebooks.
 
 | Resource | On-Demand (Hourly) | Spot (Hourly) | Savings |
 | :--- | :--- | :--- | :--- |
-| **Notebook (2 vCPU, 8 GiB)** | ~$0.14 | **~$0.017** | ~88% |
+| **Notebook (2 vCPU, 16 GiB)** | ~$0.16 | **~$0.06** | ~63% |
 | **TPU v5e Chip** | $1.20 | $0.36 | ~70% |
 
 *Note: The TPU pool defaults to On-Demand via DWS Flex because Spot TPUs can be preempted mid-execution, frustrating students. Notebooks, however, can handle preemption transparently since data is backed by Persistent Volumes.*
@@ -43,7 +43,7 @@ Because TPUs are invoked via the `submit_tpu.run()` Python client, the student o
 pie title "Cost Distribution (1 Hour Session)"
     "TPU Execution (1 min)" : 2
     "Idle TPU (Saved!)" : 0
-    "Spot Notebook (1 hr)" : 1.7
+    "Spot Notebook (1 hr)" : 6
 ```
 *(Y-axis is in cents)*
 
