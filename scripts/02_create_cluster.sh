@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: 02_create_cluster.sh
-# Description: Stand up the classroom substrate: Autopilot cluster, Kueue, section queues.
+# Description: Stand up the classroom substrate: Autopilot cluster, Kueue,
+#              StorageClasses, PriorityClasses, and ResourceQuotas.
 # Idempotent -- safe to re-run.
 #
-# Autopilot, not Standard, on purpose. Autopilot provisions a ct5lp-hightpu-1t node
-# ==============================================================================
-# per TPU pod from the two nodeSelector labels and scales back to zero when the pod
-# ends. Standard would need a node pool per topology plus the cluster autoscaler, and
-# ai-infra-demo-2026-05/capacity/README.md:127 records why that is worse on tight
-# supply: a Standard node pool asks Compute for all its nodes in ONE atomic resize
-# and hard-fails on GCE_STOCKOUT, while the queued path waits for a window.
+# Why Autopilot instead of Standard:
+# Autopilot provisions a ct5lp-hightpu-1t node per TPU pod from the two
+# nodeSelector labels and scales back to zero when the pod ends. Standard would
+# need a node pool per topology plus the cluster autoscaler, which hard-fails
+# on GCE_STOCKOUT during atomic resizes, whereas Kueue queues until capacity
+# becomes available.
 #
-# The trade Autopilot makes is billing. A TPU pod is node-billed, so you pay for the
-# whole 24 vCPU / 48 GiB node for as long as the pod lives. That is why student TPU
-# work is a short Job and not a long-lived notebook.
+# Billing:
+# A TPU pod is node-billed on Autopilot (24 vCPU / 48 GiB node for as long as
+# the pod lives). That is why student TPU work is a short Job, not an open
+# notebook.
+# ==============================================================================
 source "$(dirname "$0")/common.sh"
 require_project
 check_prereqs gcloud kubectl
@@ -34,34 +36,39 @@ else
 fi
 
 ensure_k8s_context
+K=(kubectl --context="${GKE_CTX}")
 
 # Guard against runaway log ingestion costs ($0.50/GiB). A student writing
 # `while True: print("hello")` can silently ingest terabytes of logs overnight.
 # This exclusion filter drops container stdout/stderr from student namespaces
 # before it reaches Cloud Logging billing. Logs from kube-system, the hub pod,
 # and other infrastructure namespaces are preserved.
-echo "==> log exclusion filter for student namespaces"
+log_header "Configuring Log Exclusion Filter for Student Namespaces"
 if ! gcloud logging sinks describe "_Default" --project="${PROJECT}" >/dev/null 2>&1; then
-  echo "    warning: could not verify default sink; skipping log exclusion"
+  log_warn "Could not verify default sink; skipping log exclusion."
 else
-  gcloud logging sinks update "_Default" \
+  if gcloud logging sinks update "_Default" \
     --project="${PROJECT}" \
     --add-exclusion="name=student-notebook-noise,filter=resource.labels.namespace_name=~\"^(${NAMESPACE:?}|${NAMESPACE:?}-)\" AND resource.labels.pod_name=~\"^jupyter-\"" \
-    2>/dev/null || echo "    exclusion already exists or could not be created"
+    2>/dev/null; then
+    log_success "Log exclusion filter active for namespace '${NAMESPACE}'."
+  else
+    log_info "Log exclusion filter already exists or updated."
+  fi
 fi
 
-echo "==> Kueue ${KUEUE_VERSION}"
-kubectl apply --server-side -f \
+log_header "Installing Kueue ${KUEUE_VERSION}"
+"${K[@]}" apply --server-side -f \
   "https://github.com/kubernetes-sigs/kueue/releases/download/${KUEUE_VERSION}/manifests.yaml"
 
-echo "    waiting for the Kueue controller to be available..."
-kubectl -n kueue-system wait --for=condition=Available deploy/kueue-controller-manager --timeout=600s
+log_info "Waiting for the Kueue controller to be available..."
+"${K[@]}" -n kueue-system wait --for=condition=Available deploy/kueue-controller-manager --timeout=600s
 
 # The webhook takes a few seconds past Available before it will accept CRs. Applying
 # a ClusterQueue too early fails with 'no endpoints available for service'.
-echo "    waiting for the Kueue webhook to answer..."
+log_info "Waiting for the Kueue webhook to answer..."
 for i in $(seq 1 60); do
-  kubectl get clusterqueue >/dev/null 2>&1 && break
+  "${K[@]}" get clusterqueue >/dev/null 2>&1 && break
   sleep 5
 done
 
@@ -69,16 +76,12 @@ done
 # jupyterhub-core and student-notebook, and Kubernetes rejects a pod whose
 # priorityClassName does not resolve. Applying these by hand during development and
 # forgetting to wire them in here is what broke `make hub` for a user.
-echo "==> priority classes"
-kubectl apply -f "$(dirname "$0")/../k8s/priority-classes.yaml"
+log_header "Applying PriorityClasses and ResourceFlavors"
+"${K[@]}" apply -f "$(dirname "$0")/../k8s/priority-classes.yaml"
+"${K[@]}" apply -f "$(dirname "$0")/../k8s/kueue-tpu-queues.yaml"
 
-echo "==> resource flavors"
-kubectl apply -f "$(dirname "$0")/../k8s/kueue-tpu-queues.yaml"
-
-NAMESPACE="${NAMESPACE:-cmu-idl}"
-
-echo "==> custom storage class"
-kubectl apply -f - <<EOF
+log_header "Configuring StorageClass (standard-rwo-retain)"
+"${K[@]}" apply -f - <<EOF
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
@@ -93,9 +96,10 @@ EOF
 
 NFLAVORS=2
 PER=$(( POOL_CHIPS / NFLAVORS ))
-echo "==> 1 cluster queue x ${NFLAVORS} flavors x ${PER} chips = ${POOL_CHIPS} in the cohort"
+log_header "Configuring Kueue ClusterQueue & Namespace '${NAMESPACE}'"
+log_info "Capacity: ${POOL_CHIPS} chips across ${NFLAVORS} flavors (${PER} on-demand, ${PER} flex)."
 
-kubectl apply -f - <<EOF
+"${K[@]}" apply -f - <<EOF
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ClusterQueue
 metadata:
@@ -128,11 +132,11 @@ metadata:
   namespace: ${NAMESPACE}
 spec:
   hard:
-    count/jobs.batch: "250"
-    count/pods: "500"
-    count/persistentvolumeclaims: "300"
-    # 300 home volumes x 32Gi. 500Gi was already below 300 x 10Gi.
-    requests.storage: "10Ti"
+    count/jobs.batch: "60"
+    count/pods: "100"
+    count/persistentvolumeclaims: "40"
+    # Sized for 25 student home volumes x 32Gi (800Gi) with 1Ti quota headroom
+    requests.storage: "1Ti"
 ---
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: LocalQueue
@@ -144,18 +148,19 @@ spec:
 EOF
 
 # ==============================================================================
-# REVERT TO SECTIONS REFERENCE (kept intact as requested)
+# MULTI-SECTION REFERENCE (For large cohorts requiring section-split queues)
 # ==============================================================================
-# If scaling beyond 40 students requires multiplexing namespaces again, revert
+# If scaling beyond 50 students requires multiplexing namespaces again, revert
 # the above single-namespace block and uncomment the section loop below:
 #
+# SECTIONS="${SECTIONS:-a b c d}"
 # NSEC=$(echo "${SECTIONS}" | wc -w)
 # NFLAVORS=2
 # PER=$(( POOL_CHIPS / NSEC / NFLAVORS ))
-# echo "==> ${NSEC} sections x ${NFLAVORS} flavors x ${PER} chips = ${POOL_CHIPS} in the cohort"
+# log_info "${NSEC} sections x ${NFLAVORS} flavors x ${PER} chips = ${POOL_CHIPS} in the cohort"
 #
 # for S in ${SECTIONS}; do
-#   kubectl apply -f - <<EOF
+#   "${K[@]}" apply -f - <<EOF
 # apiVersion: kueue.x-k8s.io/v1beta2
 # kind: ClusterQueue
 # metadata:
@@ -190,8 +195,8 @@ EOF
 #   hard:
 #     count/jobs.batch: "250"
 #     count/pods: "500"
-#     count/persistentvolumeclaims: "300"
-#     requests.storage: "10Ti"
+#     count/persistentvolumeclaims: "100"
+#     requests.storage: "2Ti"
 # ---
 # apiVersion: kueue.x-k8s.io/v1beta2
 # kind: LocalQueue
@@ -203,11 +208,9 @@ EOF
 # EOF
 # done
 
-
+log_header "Cluster & Queue Status"
+"${K[@]}" get clusterqueue
 echo
-echo "==> state"
-kubectl get clusterqueue
-kubectl get localqueue -A
+"${K[@]}" get localqueue -A
 echo
-echo "Pool: ${POOL_CHIPS} chips. An idle section lends its share to the other sections."
-echo "A section that submits work takes its share back."
+log_success "Substrate ready. Shared pool has ${POOL_CHIPS} chips (${PER} on-demand, ${PER} flex)."

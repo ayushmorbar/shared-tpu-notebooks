@@ -29,7 +29,7 @@ Verify your quota:
 ```bash
 gcloud compute project-info describe --project=YOUR_PROJECT | grep -A 5 "CPUS"
 ```
-You need about 8 vCPU of *node* quota per concurrent student: each default notebook requests 2 vCPU / 16 GiB, and Autopilot packs one of those per ~32 GiB node after DaemonSets. Request a quota increase in the GCP Console.
+You need about 8 vCPU of *node* quota per concurrent student: each default notebook requests 2 vCPU / 16 GiB, and Autopilot packs one of those per ~32 GiB node after DaemonSets. For 15 concurrent students, this requires ~120 vCPU (only 8% of the standard 1500 vCPU GCP project quota). If scaling to 100+ concurrent students, request a quota increase in the GCP Console.
 
 ## 3. TPU Jobs hang in the queue for 5+ minutes
 
