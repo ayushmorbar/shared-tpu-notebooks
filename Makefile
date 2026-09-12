@@ -10,7 +10,7 @@ NS      ?= cmu-idl
 WARM    ?= 1
 
 # Course Scale and Configuration
-STUDENTS      ?= 40
+STUDENTS      ?= 15
 POOL_CHIPS    ?= 32
 DOMAIN        ?= # e.g. jupyter.cs.cmu.edu
 STUDENT_GROUP ?= # e.g. group:idl-11785-students@cmu.edu
@@ -25,7 +25,7 @@ TPU_IMAGE       ?= us-docker.pkg.dev/cloud-tpu-images/jax-ai-image/tpu:latest
 
 export PROJECT REGION CLUSTER NS NAMESPACE=$(NS) STUDENTS POOL_CHIPS WARM DOMAIN STUDENT_GROUP TA_GROUP ADMIN_USERS TEST_ACCOUNTS TPU_ACCELERATOR TPU_TOPOLOGY TPU_IMAGE
 
-.PHONY: check preflight cluster image hub iap warm-on warm-off demo smoke scale report clean-pvcs clean-pvcs-dry-run teardown venv help
+.PHONY: check preflight cluster image hub iap warm-on warm-off demo smoke scale report expand-pvcs expand-pvcs-dry-run clean-pvcs clean-pvcs-dry-run teardown venv help
 
 # Ensure the PROJECT variable is set before proceeding.
 check:
@@ -86,9 +86,12 @@ scale: check venv
 	./.venv/bin/python scripts/04_scale_test.py --students $(STUDENTS) --chips $(POOL_CHIPS) --namespace $(NS)
 	./.venv/bin/python scripts/05_report.py
 
-# Generate an analytics markdown report from the latest scale test run.
-report: venv
-	./.venv/bin/python scripts/05_report.py
+# Online expansion of existing student PVCs (e.g. 10Gi -> 32Gi)
+expand-pvcs-dry-run: check
+	bash scripts/11_expand_pvcs.sh --dry-run
+
+expand-pvcs: check
+	bash scripts/11_expand_pvcs.sh --execute
 
 # Clean up retained PVCs and underlying GCP persistent disks at end of term
 clean-pvcs-dry-run: check
@@ -111,8 +114,10 @@ help:
 	@echo "  make iap PROJECT=...         Configure HTTPS Ingress & Google Identity-Aware Proxy"
 	@echo "  make warm-on PROJECT=...     Hold WARM placeholder chips ready (default WARM=1)"
 	@echo "  make warm-off PROJECT=...    Release warm placeholder chips"
-	@echo "  make scale PROJECT=...       Run concurrency scale test (STUDENTS=100 POOL_CHIPS=32)"
+	@echo "  make scale PROJECT=...       Run concurrency scale test (STUDENTS=15 POOL_CHIPS=32)"
 	@echo "  make report                  Generate analytics report from latest test run"
+	@echo "  make expand-pvcs-dry-run     Preview existing student PVCs to be resized (10Gi->32Gi)"
+	@echo "  make expand-pvcs             Dynamically resize existing PVCs to 32Gi online"
 	@echo "  make clean-pvcs-dry-run      Preview retained PVCs & persistent disks"
 	@echo "  make clean-pvcs              Permanently delete retained PVCs & persistent disks"
 	@echo "  make teardown PROJECT=...    Destroy cluster, queued resources, and static IP"
