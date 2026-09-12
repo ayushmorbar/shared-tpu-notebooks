@@ -4,6 +4,7 @@ jax-ai-stack==2025.10.28
 
 # PyTorch
 torch
+torchvision
 torchaudio
 
 # Data Science & ML Utilities
