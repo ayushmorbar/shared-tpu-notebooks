@@ -294,7 +294,13 @@ singleuser:
 
   storage:
     type: dynamic
-    capacity: 10Gi
+    # 32Gi, not 10Gi. A 112x112 uint8 train-set disk cache is ~16 GiB
+    # (431k images x 112 x 112 x 3). A 10Gi home volume fills around a
+    # quarter of that write and the notebook is killed with ENOSPC.
+    # 32Gi holds the raw JPEGs plus the .npy cache with headroom.
+    # This size applies to newly provisioned PVCs only; existing 10Gi
+    # volumes stay 10Gi until expanded (StorageClass allows it) or deleted.
+    capacity: 32Gi
     dynamic:
       storageClass: standard-rwo-retain
   # Service account the notebook uses to submit TPU Jobs. Bound by RBAC in
@@ -350,19 +356,21 @@ singleuser:
   profileList:
     - display_name: "Course default — CPU notebook"
       description: >-
-        2 vCPU, 8 GB. Where you write and debug. Run TPU work from here with
+        2 vCPU, 16 GB. Where you write and debug. Run TPU work from here with
         submit_tpu.run(); the chip is attached only while your job runs.
       default: true
-      # 2 vCPU, not 4. The heavy work happens on the chip, so a notebook that only edits
-      # code and submits jobs does not need more. Three things improve at once: two
-      # notebooks fit per node instead of one, the concurrent-notebook ceiling roughly
-      # doubles on the same CPUS quota, and each node keeps enough slack that a new system
-      # DaemonSet no longer has to evict a student to fit.
+      # 2 vCPU still: the heavy work happens on the chip. Memory is 16 GB, not 8,
+      # so interactive JAX plus a memmap'd disk cache has headroom. A full
+      # cache_mode='memory' preload of a 112x112 train split is itself ~16 GiB
+      # and still needs the 32 GB profile below. 16 GiB / 2 vCPU sits on
+      # Autopilot's 8 GiB-per-vCPU general-purpose ceiling, so GKE does not
+      # promote the pod onto a memory-optimized compute class. Packing is
+      # memory-bound: one notebook per typical 32 GiB node after DaemonSets.
       kubespawner_override:
         cpu_limit: 2
         cpu_guarantee: 2
-        mem_limit: 8G
-        mem_guarantee: 8G
+        mem_limit: 16G
+        mem_guarantee: 16G
         # Spot VMs cut notebook cost by 60-91%. Student state lives on the PVC,
         # so a preemption is just a page reload — no work lost.
         node_selector:
@@ -370,8 +378,9 @@ singleuser:
 
     - display_name: "Large CPU notebook"
       description: >-
-        8 vCPU, 32 GB, for dataset preprocessing and tokenizer training. Still no
-        accelerator — TPU work goes through the queue.
+        8 vCPU, 32 GB, for dataset preprocessing, tokenizer training, or an
+        in-memory image cache. Still no accelerator — TPU work goes through the
+        queue.
       kubespawner_override:
         cpu_limit: 8
         cpu_guarantee: 8

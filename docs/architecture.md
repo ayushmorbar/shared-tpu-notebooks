@@ -10,7 +10,7 @@ In standard Cloud environments, a Jupyter notebook running on an accelerator nod
 
 Instead of providing a TPU to the notebook directly, this architecture decouples the notebook from the hardware.
 
-1. **CPU Notebooks:** Students are given a low-cost Spot CPU notebook (2 vCPU, 8 GiB).
+1. **CPU Notebooks:** Students are given a low-cost Spot CPU notebook (2 vCPU, 16 GiB RAM, 32 GiB home disk).
 2. **Kueue Scheduling:** Code meant for the TPU is submitted as an ephemeral Kubernetes `Job` via `submit_tpu.py`.
 3. **Queue Execution:** `Kueue` (the admission controller) queues these jobs against a shared pool of TPU resources (e.g., 32 or 64 chips).
 4. **Scale-to-Zero:** GKE Autopilot provisions TPU nodes from the Dynamic Workload Scheduler (DWS) Flex Pool only when jobs exist, and destroys them after.
