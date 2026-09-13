@@ -352,6 +352,9 @@ singleuser:
     hw0_tpu_hello.ipynb:
       mountPath: /opt/course/hw0_tpu_hello.ipynb
       stringData: "placeholder, replaced at deploy time"
+    F26_HW2P2_JAX_Hub.ipynb:
+      mountPath: /opt/course/F26_HW2P2_JAX_Hub.ipynb
+      stringData: "placeholder, replaced at deploy time"
   # Two jobs at spawn.
   #
   # 1. Install the kubernetes client. The scipy-notebook image has none and
@@ -370,7 +373,7 @@ singleuser:
         command:
           - "sh"
           - "-c"
-          - "cp -n /opt/course/hw0_tpu_hello.ipynb /home/jovyan/ 2>/dev/null || true"
+          - "cp -n /opt/course/hw0_tpu_hello.ipynb /home/jovyan/ 2>/dev/null || true; cp -n /opt/course/F26_HW2P2_JAX_Hub.ipynb /home/jovyan/ 2>/dev/null || true"
   startTimeout: 600  # Extend from default 300s to 600s for dynamic GKE Autopilot node scale-up and CSI disk attachment
   defaultUrl: "/lab"
   image:
