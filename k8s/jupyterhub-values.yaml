@@ -24,6 +24,8 @@
 
 hub:
   config:
+    JupyterHub:
+      admin_access: true
     Authenticator:
       # Local part of the Google identity IAP forwards, i.e. everything before the @.
       admin_users:
@@ -53,6 +55,24 @@ hub:
   # trusting the email header. The header is sufficient here because the only path in
   # is the IAP-protected one.
   extraConfig:
+    cmu-branding: |
+      c.JupyterHub.template_vars = {
+          'announcement': (
+              '<div style="background: linear-gradient(135deg, #C41230 0%, #8A001A 100%); '
+              'color: #FFFFFF; padding: 12px 18px; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); '
+              'font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, sans-serif; '
+              'margin-bottom: 16px; font-size: 14px; line-height: 1.5; display: flex; align-items: center; justify-content: space-between;">'
+              '<span><strong>🎓 Carnegie Mellon University — 11-785 Introduction to Deep Learning</strong> | '
+              'Cloud TPU v5e Shared Accelerator Hub &bull; Prof. Bhiksha Raj &amp; Prof. Rita Singh</span>'
+              '<a href="https://deeplearning.cs.cmu.edu/" target="_blank" '
+              'style="color: #FFFFFF; background: rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 4px; '
+              'text-decoration: none; font-size: 12px; font-weight: 600; margin-left: 12px; white-space: nowrap;">'
+              'Course Home &rarr;</a>'
+              '</div>'
+          ),
+          'hub_title': 'CMU 11-785 Deep Learning Hub',
+      }
+      c.JupyterHub.admin_access = True
     iap-auth: |
       import time
       import jwt
@@ -348,46 +368,44 @@ singleuser:
           - "sh"
           - "-c"
           - "cp -n /opt/course/hw0_tpu_hello.ipynb /home/jovyan/ 2>/dev/null || true"
+  startTimeout: 600  # Extend from default 300s to 600s for dynamic GKE Autopilot node scale-up and CSI disk attachment
   defaultUrl: "/lab"
   image:
     name: us-docker.pkg.dev/__PROJECT__/cmu-idl/jupyter-course-image
     tag: "latest"
 
   profileList:
-    - display_name: "Course default — CPU notebook"
+    - display_name: "Course default (CPU notebook)"
       description: >-
-        2 vCPU, 16 GB. Where you write and debug. Run TPU work from here with
+        2 vCPU, 16 GB RAM, 32 GiB home disk. Where you write and debug. Run TPU work from here with
         submit_tpu.run(); the chip is attached only while your job runs.
       default: true
-      # 2 vCPU still: the heavy work happens on the chip. Memory is 16 GB, not 8,
-      # so interactive JAX plus a memmap'd disk cache has headroom. A full
-      # cache_mode='memory' preload of a 112x112 train split is itself ~16 GiB
-      # and still needs the 32 GB profile below. 16 GiB / 2 vCPU sits on
-      # Autopilot's 8 GiB-per-vCPU general-purpose ceiling, so GKE does not
-      # promote the pod onto a memory-optimized compute class. Packing is
-      # memory-bound: one notebook per typical 32 GiB node after DaemonSets.
+      # Sized for CMU 11-785 HW2P2 image disk caching (~16 GiB uint8) with bursting headroom.
+      # cpu_guarantee: 1 allows dense GKE Autopilot node packing while bursting to 2 vCPU.
       kubespawner_override:
         cpu_limit: 2
-        cpu_guarantee: 2
-        mem_limit: 16G
-        mem_guarantee: 16G
+        cpu_guarantee: 1
+        mem_limit: "16G"
+        mem_guarantee: "4G"
         # Spot VMs cut notebook cost by 60-91%. Student state lives on the PVC,
         # so a preemption is just a page reload — no work lost.
         node_selector:
           cloud.google.com/gke-spot: "true"
 
-    - display_name: "Large CPU notebook"
-      description: >-
-        8 vCPU, 32 GB, for dataset preprocessing, tokenizer training, or an
-        in-memory image cache. Still no accelerator — TPU work goes through the
-        queue.
-      kubespawner_override:
-        cpu_limit: 8
-        cpu_guarantee: 8
-        mem_limit: 32G
-        mem_guarantee: 32G
-        node_selector:
-          cloud.google.com/gke-spot: "true"
+    # Commented out for general students to protect regional CPU quotas.
+    # Staff / instructors who need large compute can use the staff profile below.
+    # - display_name: "Large CPU notebook"
+    #   description: >-
+    #     8 vCPU, 32 GB, for dataset preprocessing, tokenizer training, or an
+    #     in-memory image cache. Still no accelerator — TPU work goes through the
+    #     queue.
+    #   kubespawner_override:
+    #     cpu_limit: 8
+    #     cpu_guarantee: 8
+    #     mem_limit: 32G
+    #     mem_guarantee: 32G
+    #     node_selector:
+    #       cloud.google.com/gke-spot: "true"
 
     - display_name: "Pinned TPU v5e notebook (staff only)"
       description: >-

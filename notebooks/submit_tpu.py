@@ -174,6 +174,7 @@ def run(code: str, timeout: int = 28800, keep: bool = False) -> str:
 
     t0 = time.time()
     admitted_at = None
+    last_heartbeat = t0
 
     try:
         while time.time() - t0 < timeout:
@@ -194,6 +195,10 @@ def run(code: str, timeout: int = 28800, keep: bool = False) -> str:
             if admitted_at is None and not j.spec.suspend:
                 admitted_at = time.time()
                 print(f"  admitted after {admitted_at - t0:.0f}s in queue", flush=True)
+            elif admitted_at is None and (time.time() - last_heartbeat) >= 30:
+                elapsed = int(time.time() - t0)
+                print(f"  [Queue Update] Still waiting for TPU allocation ({elapsed}s elapsed)...", flush=True)
+                last_heartbeat = time.time()
 
             pods = core.list_namespaced_pod(
                 ns, label_selector=f"job-name={name}"
@@ -208,6 +213,15 @@ def run(code: str, timeout: int = 28800, keep: bool = False) -> str:
                     if phase == "Failed":
                         raise RuntimeError(f"job failed:\n{out}")
                     return out
+                elif phase == "Pending" and (time.time() - last_heartbeat) >= 30:
+                    elapsed = int(time.time() - t0)
+                    print(f"  [Starting] TPU container initializing ({elapsed}s elapsed)...", flush=True)
+                    last_heartbeat = time.time()
+            elif admitted_at is not None and (time.time() - last_heartbeat) >= 30:
+                elapsed = int(time.time() - t0)
+                print(f"  [Node Build] TPU node provisioning in progress ({elapsed}s elapsed)...", flush=True)
+                last_heartbeat = time.time()
+
             time.sleep(5)
 
     except KeyboardInterrupt:
