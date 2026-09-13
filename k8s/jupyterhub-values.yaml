@@ -23,6 +23,9 @@
 # reachable from an ordinary project. The labels below are the v5e equivalent.
 
 hub:
+  db:
+    pvc:
+      storage: 32Gi
   config:
     JupyterHub:
       admin_access: true

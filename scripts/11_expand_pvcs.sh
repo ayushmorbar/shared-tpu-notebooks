@@ -50,6 +50,12 @@ ALREADY_TARGET=0
 while IFS=$'\t' read -r PVC_NAME CURRENT_SIZE; do
   [[ -z "${PVC_NAME}" ]] && continue
 
+  # Only expand student notebook claims (e.g. claim-amorbar). Skip hub internal PVCs like hub-db-dir.
+  if [[ "${PVC_NAME}" != claim-* ]]; then
+    log_info "Skipping non-student volume '${PVC_NAME}'."
+    continue
+  fi
+
   if [[ "${CURRENT_SIZE}" == "${TARGET_SIZE}" ]]; then
     log_success "${PVC_NAME} is already at ${TARGET_SIZE}."
     ALREADY_TARGET=$((ALREADY_TARGET + 1))
