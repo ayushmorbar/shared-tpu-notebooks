@@ -101,7 +101,7 @@ make iap PROJECT=my-project REGION=us-west4 NS=cmu-idl
 > [https://console.cloud.google.com/auth/branding?project=my-project](https://console.cloud.google.com/auth/branding)
 > Without this screen configured, IAP will refuse incoming web requests.
 
-Once the Google-managed SSL certificate transitions to `Active` (typically 10–20 minutes), navigate to the output URL (e.g. `https://<ip>.nip.io` or your custom domain), sign in with an authorized Google account, and open `hw0_tpu_hello.ipynb`.
+Once the Google-managed SSL certificate transitions to `Active` (typically 10–20 minutes), navigate to the output URL (e.g. `https://<ip>.nip.io` or your custom domain), sign in with an authorized Google account, and open `gcp_barebones.ipynb` or `hw0_tpu_hello.ipynb`.
 
 ---
 
@@ -332,6 +332,7 @@ shared-tpu-notebooks/
 │   ├── student-tpu-job.yaml     # Declarative batch Job template for TPU runs
 │   └── tpu-warm-pool.yaml       # Priority -10 placeholder deployment & auto-off CronJob
 ├── notebooks/
+│   ├── gcp_barebones.ipynb      # Default GCP notebook: CPU kernel, TPU via submit_tpu
 │   ├── hw0_tpu_hello.ipynb      # Sample assignment: Attention FLOPs & roofline analysis
 │   └── submit_tpu.py            # Client library for submitting TPU jobs from notebooks
 └── scripts/

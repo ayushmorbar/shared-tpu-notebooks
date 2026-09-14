@@ -103,6 +103,7 @@ helm upgrade --install "${RELEASE}" jupyterhub/jupyterhub \
   --set "hub.config.Authenticator.admin_users={${ADMIN_STR}}" \
   --set-file "singleuser.extraFiles.submit_tpu\.py.stringData=$(dirname "$0")/../notebooks/submit_tpu.py" \
   --set-file "singleuser.extraFiles.hw0_tpu_hello\.ipynb.stringData=$(dirname "$0")/../notebooks/hw0_tpu_hello.ipynb" \
+  --set-file "singleuser.extraFiles.gcp_barebones\.ipynb.stringData=$(dirname "$0")/../notebooks/gcp_barebones.ipynb" \
   --timeout 20m \
   --wait
 

@@ -352,25 +352,27 @@ singleuser:
     hw0_tpu_hello.ipynb:
       mountPath: /opt/course/hw0_tpu_hello.ipynb
       stringData: "placeholder, replaced at deploy time"
+    gcp_barebones.ipynb:
+      mountPath: /opt/course/gcp_barebones.ipynb
+      stringData: "placeholder, replaced at deploy time"
   # Two jobs at spawn.
   #
   # 1. Install the kubernetes client. The scipy-notebook image has none and
   #    submit_tpu.py needs one. Bake this into a course image for a real term.
   #
-  # 2. Copy the assignment into the student's home directory. extraFiles mounts are
-  #    read-only ConfigMap volumes, so the notebook cannot live in /home/jovyan
-  #    directly -- the home directory is a PVC and the two would fight. Mount it under
-  #    /opt/course and copy on first spawn instead.
+  # 2. Copy course notebooks into the student's home directory. extraFiles mounts
+  #    are read-only ConfigMap volumes, so they cannot live in /home/jovyan
+  #    directly -- the home directory is a PVC and the two would fight.
   #
-  #    `cp -n` matters: without it, every restart would overwrite the student's work
-  #    with the blank assignment.
+  #    `cp -n` for notebooks: without it, every restart would overwrite student work.
+  #    submit_tpu.py is overwritten on spawn so a stale PVC copy cannot shadow Hub.
   lifecycleHooks:
     postStart:
       exec:
         command:
           - "sh"
           - "-c"
-          - "cp -n /opt/course/hw0_tpu_hello.ipynb /home/jovyan/ 2>/dev/null || true"
+          - "cp /opt/course/submit_tpu.py /home/jovyan/submit_tpu.py 2>/dev/null || true; cp -n /opt/course/hw0_tpu_hello.ipynb /home/jovyan/ 2>/dev/null || true; cp -n /opt/course/gcp_barebones.ipynb /home/jovyan/ 2>/dev/null || true"
   startTimeout: 600  # Extend from default 300s to 600s for dynamic GKE Autopilot node scale-up and CSI disk attachment
   defaultUrl: "/lab"
   image:
