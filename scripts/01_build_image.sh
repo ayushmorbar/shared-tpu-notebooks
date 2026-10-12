@@ -1,25 +1,27 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: 01_build_image.sh
-# Description: Build and push the custom course Docker image.
+# Description: Build and push the course images.
 #
-# We inherit from the standard scipy-notebook and bake in the kubernetes client.
-# This saves several seconds on every student pod's cold start compared to running
-# a pip install in a postStart lifecycle hook.
+#   notebook    docker/              the CPU notebook every student gets (scipy-notebook
+#                                    plus the course libraries and HW unit-test deps)
+#   tpu-job     docker/tpu-job/      what student training scripts run in on the chip
+#   tpu-submit  services/tpu-submit/ the submission service
 #
 # Usage:
-#   make image
+#   make image                       all three
+#   bash scripts/01_build_image.sh tpu-job
 # ==============================================================================
 
 source "$(dirname "$0")/common.sh"
 require_project
 check_prereqs gcloud docker
 
-REPO="${REGION}-docker.pkg.dev/${PROJECT}/course-images"
-IMAGE="${REPO}/scipy-notebook:latest"
+TARGETS=("${@:-all}")
+[[ "${TARGETS[0]}" == "all" ]] && TARGETS=(notebook tpu-job tpu-submit)
 
-log_header "Building & Pushing Course Docker Image"
-log_info "Target Image: ${IMAGE}"
+log_header "Building & Pushing Course Images: ${TARGETS[*]}"
+log_info "Registry: ${COURSE_REGISTRY}"
 
 if ! gcloud artifacts repositories describe course-images --location="${REGION}" --project="${PROJECT}" >/dev/null 2>&1; then
   log_info "Creating Artifact Registry repository 'course-images' in ${REGION}..."
@@ -65,13 +67,31 @@ fi
 echo "==> configuring docker auth for Artifact Registry"
 gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
 
-echo "==> building image ${IMAGE}"
-docker build -t "${IMAGE}" "$(dirname "$0")/../docker"
+build_push() {
+  local image="$1"; shift
+  echo "==> building ${image}"
+  docker build -t "${image}" "$@"
+  echo "==> pushing ${image}"
+  docker push "${image}"
+}
 
-echo "==> pushing image"
-docker push "${IMAGE}"
+for target in "${TARGETS[@]}"; do
+  case "${target}" in
+    notebook)
+      build_push "${NOTEBOOK_IMAGE}" "${REPO_ROOT}/docker" ;;
+    tpu-job)
+      # TPU nodes are amd64; build for it even from an arm64 laptop.
+      build_push "${TPU_JOB_IMAGE}" --platform linux/amd64 \
+        --build-arg "BASE_IMAGE=${TPU_IMAGE}" "${REPO_ROOT}/docker/tpu-job" ;;
+    tpu-submit)
+      build_push "${SUBMIT_IMAGE}" --platform linux/amd64 "${REPO_ROOT}/services/tpu-submit" ;;
+    *)
+      log_error "unknown image '${target}' (expected notebook, tpu-job, tpu-submit, or all)"
+      exit 1 ;;
+  esac
+done
 
 echo
-echo "Done. The hub is configured to use this image by default via IMAGE_NAME."
-echo "If IMAGE_NAME is not set, be sure to update k8s/jupyterhub-values.yaml to point to:"
-echo "    ${IMAGE}"
+echo "Done. 03_deploy_hub.sh points the hub and the submission service at these images."
+echo "A new tpu-job image is picked up by the next job; a new tpu-submit image needs:"
+echo "    kubectl -n ${NAMESPACE} rollout restart deployment/tpu-submit"

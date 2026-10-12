@@ -25,7 +25,7 @@ TPU_IMAGE       ?= us-docker.pkg.dev/cloud-tpu-images/jax-ai-image/tpu:latest
 
 export PROJECT REGION CLUSTER NS NAMESPACE=$(NS) STUDENTS POOL_CHIPS WARM DOMAIN STUDENT_GROUP TA_GROUP ADMIN_USERS TEST_ACCOUNTS TPU_ACCELERATOR TPU_TOPOLOGY TPU_IMAGE
 
-.PHONY: check preflight cluster image hub iap warm-on warm-off demo smoke scale report expand-pvcs expand-pvcs-dry-run clean-pvcs clean-pvcs-dry-run teardown venv help
+.PHONY: check preflight cluster image storage hub iap warm-on warm-off demo smoke smoke-submit test scale report expand-pvcs expand-pvcs-dry-run clean-pvcs clean-pvcs-dry-run teardown venv help
 
 # Ensure the PROJECT variable is set before proceeding.
 check:
@@ -37,7 +37,7 @@ endif
 preflight: check
 	bash scripts/00_preflight.sh
 
-# Build and push the custom Jupyter course image to Artifact Registry.
+# Build and push the notebook, TPU job, and submission service images.
 image: check
 	bash scripts/01_build_image.sh
 
@@ -45,7 +45,11 @@ image: check
 cluster: check
 	bash scripts/02_create_cluster.sh
 
-# Deploy JupyterHub using Helm and configure student RBAC.
+# Buckets for TPU job files and datasets, and Workload Identity bindings for them.
+storage: check
+	bash scripts/12_setup_storage.sh
+
+# Deploy JupyterHub and the TPU submission service.
 hub: check
 	bash scripts/03_deploy_hub.sh
 
@@ -57,6 +61,15 @@ smoke: check
 	kubectl -n $(NS) wait --for=condition=complete job/smoke-000 --timeout=900s
 	kubectl -n $(NS) logs -l job-name=smoke-000 --tail=-1
 	kubectl -n $(NS) delete job smoke-000
+
+# The student path end to end: submit_tpu.py -> tpu-submit -> Kueue -> chip -> bucket.
+# Needs a JupyterHub API token: HUB_TOKEN=... make smoke-submit
+smoke-submit: check
+	bash scripts/13_smoke_submit.sh
+
+# Unit and end-to-end tests for the service, client, and TPU wrapper. No cloud calls.
+test:
+	python3 -m pytest tests -q
 
 # HTTPS + Google sign-in via Identity-Aware Proxy. Run once per cluster. Replaces
 # port-forwarding, which binds to a single proxy pod and dies when that pod moves.
@@ -107,10 +120,13 @@ teardown: check
 help:
 	@echo "shared-tpu-notebooks Makefile commands:"
 	@echo "  make preflight PROJECT=...   Check regional quota and accelerator types (free)"
-	@echo "  make image PROJECT=...       Build & push custom course image to Artifact Registry"
+	@echo "  make image PROJECT=...       Build & push notebook, tpu-job, tpu-submit images"
 	@echo "  make cluster PROJECT=...     Create GKE Autopilot cluster, Kueue, & quotas (~12m)"
-	@echo "  make hub PROJECT=...         Deploy JupyterHub Helm chart & student RBAC"
-	@echo "  make smoke PROJECT=...       Submit 1 verification TPU job on 1 v5e chip"
+	@echo "  make storage PROJECT=...     Create job/dataset buckets & Workload Identity bindings"
+	@echo "  make hub PROJECT=...         Deploy JupyterHub Helm chart & TPU submission service"
+	@echo "  make smoke PROJECT=...       Submit 1 verification TPU job on 1 v5e chip (raw YAML)"
+	@echo "  make smoke-submit PROJECT=.. Submit hello.py through the submission service"
+	@echo "  make test                    Unit tests for the service, client, and TPU wrapper"
 	@echo "  make iap PROJECT=...         Configure HTTPS Ingress & Google Identity-Aware Proxy"
 	@echo "  make warm-on PROJECT=...     Hold WARM placeholder chips ready (default WARM=1)"
 	@echo "  make warm-off PROJECT=...    Release warm placeholder chips"

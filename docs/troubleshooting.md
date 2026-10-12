@@ -34,11 +34,11 @@ You need about 8 vCPU of *node* quota per concurrent student: each default noteb
 ## 3. TPU Jobs hang in the queue for 5+ minutes
 
 **Symptom:**
-The cell output shows:
+`submit_tpu.watch()` keeps printing:
 ```text
-submitted tpu-studentname to queue 'tpu'
+[20261010-221530-a1b2] queued, #14 in line
 ```
-But the `admitted` message never appears.
+or stays at `starting` for several minutes.
 
 **Root Cause:**
 1. **Zero Flex Capacity:** The DWS Flex pool in your zone is empty, and standard on-demand capacity is heavily congested.
@@ -52,21 +52,32 @@ kubectl get workloads -n cmu-idl
 ```
 If a workload says "Quota Reserved" but the Pod is pending, GKE is currently booting the TPU VM. Wait 2-4 minutes.
 
-## 4. `ApiException: 403 Forbidden` in Notebook
+## 4. `submit_tpu.submit()` errors
 
-**Symptom:**
-Running `submit_tpu.run()` yields an HTTP 403 error from the Python Kubernetes client.
+Every refusal from the service is a `SubmitError` whose message says what to do. The ones that point at the deployment rather than the student:
 
-**Root Cause:**
-The student notebook ServiceAccount does not have RBAC permissions to create Jobs.
+| Message | Cause | Fix |
+| :--- | :--- | :--- |
+| `Could not reach the TPU submission service` | The tpu-submit pod is down or restarting, or the notebook's NetworkPolicy does not allow it. | `kubectl -n cmu-idl get pods -l app.kubernetes.io/name=tpu-submit`; check its logs; re-run `make hub`. |
+| `This JupyterHub token cannot use the TPU submission service. (HTTP 403)` | The notebook's token lacks `access:services!service=tpu-submit`. Servers started before the hub config change keep their old token. | Have the student restart their server (File → Hub Control Panel → Stop, then Start). |
+| `TPU_SUBMIT_URL is not set` | The server predates the hub config change, or the code is running outside the hub. | Restart the server. |
+| `Could not create the Kubernetes Job: ... exceeded quota` (HTTP 500) | The namespace ResourceQuota `count/jobs.batch` is full. | Raise `STUDENTS` and re-run `make cluster`, or lower `JOB_TTL_SECONDS`. |
+| `You already have job ... queued or running` (HTTP 409) | One active job per student, by design. | `submit_tpu.cancel()` or wait. |
 
-**Fix:**
-Ensure the `student-tpu-rbac` Role and RoleBinding are correctly applied. Re-run:
+The service log has one line per submit and cancel:
 ```bash
-make hub
+kubectl -n cmu-idl logs deploy/tpu-submit --tail=100
 ```
 
-## 5. Webhook Rejection for Privilege
+## 5. A job ends `failed` before training starts
+
+Open the log with `submit_tpu.logs(job)`. Lines starting with `[tpu ...]` come from the job wrapper:
+
+- `setup failed before your script ran: dataset archive gs://... does not exist`, or a 403 from Cloud Storage: the dataset path in `DATASETS` is wrong, or `make storage` has not granted `tpu-job` read access. IAM changes can take a few minutes to apply.
+- `No space left on device` while unpacking the dataset: raise `JOB_DISK` (and keep it within Autopilot's ephemeral-storage limit for TPU pods).
+- A pod that stays `Pending` with `CreateContainerConfigError` for more than a minute means its per-job Secret is missing; cancel and resubmit.
+
+## 6. Webhook Rejection for Privilege
 
 **Symptom:**
 JupyterHub pods fail to start with `denied by autogke-disallow-privilege: container block-cloud-metadata is privileged`.

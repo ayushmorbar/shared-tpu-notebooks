@@ -43,6 +43,22 @@ TPU_ACCELERATOR="${TPU_ACCELERATOR:-tpu-v5-lite-podslice}"
 TPU_TOPOLOGY="${TPU_TOPOLOGY:-1x1}"
 TPU_IMAGE="${TPU_IMAGE:-us-docker.pkg.dev/cloud-tpu-images/jax-ai-image/tpu:latest}"
 
+# Images built by 01_build_image.sh.
+COURSE_REGISTRY="${COURSE_REGISTRY:-${REGION}-docker.pkg.dev/${PROJECT}/course-images}"
+NOTEBOOK_IMAGE="${NOTEBOOK_IMAGE:-${COURSE_REGISTRY}/scipy-notebook:latest}"
+TPU_JOB_IMAGE="${TPU_JOB_IMAGE:-${COURSE_REGISTRY}/tpu-job:latest}"
+SUBMIT_IMAGE="${SUBMIT_IMAGE:-${COURSE_REGISTRY}/tpu-submit:latest}"
+
+# TPU submission service and its storage (12_setup_storage.sh, 03_deploy_hub.sh).
+STUDENT_BUCKET="${STUDENT_BUCKET:-${PROJECT}-tpu-runs}"
+DATASET_BUCKET="${DATASET_BUCKET:-${PROJECT}-course-data}"
+DATASETS="${DATASETS:-}"
+DEFAULT_DATASET="${DEFAULT_DATASET:-}"
+MAX_JOB_HOURS="${MAX_JOB_HOURS:-8}"
+CHIP_HOUR_BUDGET="${CHIP_HOUR_BUDGET:-0}"
+JOB_DISK="${JOB_DISK:-100Gi}"
+RUNS_RETENTION_DAYS="${RUNS_RETENTION_DAYS:-120}"
+
 DOMAIN="${DOMAIN:-}"
 STUDENT_GROUP="${STUDENT_GROUP:-}"
 TA_GROUP="${TA_GROUP:-}"

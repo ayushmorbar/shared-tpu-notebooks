@@ -37,7 +37,7 @@ cull:
 
 ### 2. Ephemeral TPU Execution
 
-Because TPUs are invoked via the `submit_tpu.run()` Python client, the student only bills the TPU for the *exact seconds* their matrix multiplication is running.
+Because TPU work is sent as a queued job with `submit_tpu.submit()`, a chip bills only while a student's script runs, not while their notebook is open.
 
 ```mermaid
 pie title "Cost Distribution (1 Hour Session)"
@@ -47,7 +47,37 @@ pie title "Cost Distribution (1 Hour Session)"
 ```
 *(Y-axis is in cents)*
 
-### 3. The Warm Pool Guardrail
+### 3. Training Runs: Job Length and Chip-Hour Budget
+
+From HW3 on, a job is a full training run, not a 15-second snippet, and that changes the arithmetic. A job bills about **$1.35 per chip-hour for its whole run**, including the minutes it spends downloading the dataset to local disk.
+
+| Pool | Job length | One run per student (300) | Wall time to drain | TPU cost |
+| :--- | :---: | :---: | :---: | :---: |
+| 64 chips | 8 h | 5 back-to-back rounds | ~40 h | ~$3,200 |
+| 64 chips | 4 h | 5 rounds | ~20 h | ~$1,600 |
+| 128 chips | 8 h | 3 rounds | ~24 h | ~$3,200 |
+
+The cost per pass does not depend on the pool size; the pool only decides how long the queue takes to drain. The two levers are in `config.env` and are enforced by the tpu-submit service:
+
+- **`MAX_JOB_HOURS`** becomes each Job's `activeDeadlineSeconds`. Time spent waiting in the Kueue queue does not count. When it runs out, the script gets SIGTERM, the wrapper uploads the last checkpoint, and the student can continue with `resume_from=`.
+- **`CHIP_HOUR_BUDGET`** is a per-student total, computed from the start and end times tpu-submit records in the bucket. Once a student reaches it, new submissions are refused with a message to ask a TA. `0` disables it.
+- **One active job per student** (queued or running) is always enforced, so nobody can hold several chips or several places in line.
+
+Set both after one measured baseline run of the assignment on v5e. That run gives the epoch time and the dataset size; the dataset size also decides `JOB_DISK`, which has to fit Autopilot's ephemeral-storage limit for TPU pods.
+
+To see who is using what, list every live job as an admin (with a JupyterHub API token):
+
+```bash
+kubectl -n cmu-idl port-forward svc/tpu-submit 18080:8080 &
+curl -s -H "Authorization: token $HUB_TOKEN" "http://127.0.0.1:18080/api/jobs?all=1"
+curl -s -H "Authorization: token $HUB_TOKEN" "http://127.0.0.1:18080/api/me?user=<student>"
+```
+
+### 4. Storage for Job Files
+
+Job snapshots, logs, and checkpoints live in `STUDENT_BUCKET`. `make storage` turns off soft delete on that bucket, because jobs overwrite their checkpoint every epoch and each overwritten copy would otherwise bill for seven more days, and expires objects after `RUNS_RETENTION_DAYS`. TPU job console output is excluded from Cloud Logging (`student-tpu-job-noise`), since the bucket already keeps it as `job.log`.
+
+### 5. The Warm Pool Guardrail
 
 Instructors can hold a "warm" TPU node via `make warm-on WARM=1` to prevent cold-starts during a live lecture. Because a warm node bills $1.35/hour constantly, we have a failsafe:
 

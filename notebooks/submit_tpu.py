@@ -1,238 +1,356 @@
-"""Run code on a TPU chip from a CPU notebook.
+"""Run a training script on a TPU chip from a CPU notebook, like sbatch.
 
-This is the piece that makes the classroom affordable. The student's notebook has no
-accelerator. When they call run(), this submits a Kubernetes Job that Kueue queues
-against the shared v5e pool, waits for a chip, runs their code on it, and streams the
-output back. The chip is held for the seconds the job runs, not for the hours the
-notebook is open.
+Your notebook has no accelerator. submit() packs the folder your script lives in, sends
+it to the course's TPU submission service, and the service queues a job on the shared
+v5e pool. When a chip is free the job unpacks your folder and the dataset on the chip's
+machine, runs your script, and keeps uploading its log and expts/ folder (checkpoints,
+results.csv) so you can watch it and download the results here.
 
     import submit_tpu
-    submit_tpu.run('''
-        import jax, jax.numpy as jnp
-        print(jax.devices())
-        print(jnp.ones((4, 4)) @ jnp.ones((4, 4)))
-    ''')
+    job = submit_tpu.submit("train.py", args=["--config", "config.yaml"],
+                            env={"WANDB_API_KEY": WANDB_API_KEY})
+    submit_tpu.watch(job)    # live log; stopping this cell does NOT stop the job
+    submit_tpu.status()      # your jobs, and your place in line
+    submit_tpu.pull(job)     # copy expts/ and job.log into ./tpu_runs/<job id>/
+    submit_tpu.cancel(job)   # stop it and give the chip back
 
-The notebook does not get its own TPU because GKE schedules one pod per TPU node, and
-that pod uses every chip on the node. Two students cannot share a v5e chip. An attached
-chip therefore holds a full node while the student reads the assignment. For 300
-students that is 300 nodes. A queue turns the same class into a 32-chip pool.
+The chip is held only while your job runs. You can have one job queued or running at a
+time. A job pushed off its chip by the cluster restarts on its own and resumes from the
+last checkpoint it uploaded. To continue a finished or failed run, submit again with
+resume_from=<old job>.
+
+What gets sent: every file under the script's folder except notebooks (*.ipynb, which
+often hold pasted keys), credentials (kaggle.json, .env, .netrc, keys), caches, data
+folders, and earlier outputs (expts/, checkpoints/, wandb/, tpu_runs/). Keys you pass in
+env= go to the job as environment variables; they are never stored in the snapshot.
 """
 
 from __future__ import annotations
 
+import fnmatch
 import os
+import sys
+import tarfile
+import tempfile
 import time
+from dataclasses import dataclass
+from pathlib import Path
 
-from kubernetes import client, config
-from kubernetes.client.exceptions import ApiException
+import requests
 
-TPU_IMAGE = os.environ.get(
-    "TPU_IMAGE", "us-docker.pkg.dev/cloud-tpu-images/jax-ai-image/tpu:latest"
+SERVICE_URL = os.environ.get("TPU_SUBMIT_URL", "").rstrip("/")
+MAX_SNAPSHOT_MB = int(os.environ.get("TPU_MAX_SNAPSHOT_MB", "100"))
+
+EXCLUDE_DIRS = {
+    ".git", ".hg", ".svn", "__pycache__", ".ipynb_checkpoints", ".pytest_cache",
+    ".mypy_cache", ".ruff_cache", ".venv", "venv", "node_modules", ".cache",
+    ".local", ".config", ".jupyter", ".ipython", ".kaggle", ".ssh",
+    "expts", "checkpoints", "wandb", "tpu_runs",
+}
+# Only at the top of the snapshot: code packages like hw3lib/data/ must still be sent.
+EXCLUDE_TOP_DIRS = ("data", "datasets", "hw*_data", "hw*-data", "hw*_data_subset")
+EXCLUDE_FILES = (
+    "*.ipynb", "kaggle.json", ".env", ".env.*", "*.env", ".netrc", "_netrc",
+    "*.key", "*.pem", "id_rsa*", "id_ed25519*", "credentials*.json",
+    "*.pyc", ".DS_Store", "*.tar.gz.part",
 )
-QUEUE = os.environ.get("KUEUE_LOCAL_QUEUE", "tpu")
-TPU_ACCELERATOR = os.environ.get("TPU_ACCELERATOR", "tpu-v5-lite-podslice")
-TPU_TOPOLOGY = os.environ.get("TPU_TOPOLOGY", "1x1")
 
 
-class JobInterrupted(RuntimeError):
-    """The job went away before it could run.
-    
-    This exception is raised when the job is deleted from the cluster 
-    (e.g., via TTL or manual deletion) before it was admitted or finished.
-    Nothing executed; re-running is safe.
-    """
+class SubmitError(RuntimeError):
+    """The service refused the request. The message says why."""
 
 
-def _delete(batch: "client.BatchV1Api", name: str, ns: str) -> None:
-    """Delete a Job, tolerating the case where it is already gone.
+@dataclass
+class Job:
+    id: str
+    info: dict
 
-    Args:
-        batch (client.BatchV1Api): The initialized Kubernetes Batch V1 API client.
-        name (str): The name of the Job to delete.
-        ns (str): The namespace where the Job resides.
-    """
+    def __str__(self) -> str:
+        return self.id
+
+    def __repr__(self) -> str:
+        return f"Job({self.id!r}, state={self.info.get('state')!r})"
+
+
+# --------------------------------------------------------------------------- HTTP
+
+def _session() -> requests.Session:
+    if not SERVICE_URL:
+        raise SubmitError(
+            "TPU_SUBMIT_URL is not set. submit_tpu only works from a notebook on the course hub."
+        )
+    token = os.environ.get("JUPYTERHUB_API_TOKEN")
+    if not token:
+        raise SubmitError("JUPYTERHUB_API_TOKEN is not set. Restart your server from the hub.")
+    s = requests.Session()
+    s.headers["Authorization"] = f"token {token}"
+    return s
+
+
+def _call(method: str, path: str, *, timeout=(10, 120), stream=False, **kw) -> requests.Response:
     try:
-        batch.delete_namespaced_job(name, ns, propagation_policy="Background")
-    except ApiException as e:
-        if e.status != 404:
-            raise
+        resp = _session().request(method, SERVICE_URL + path, timeout=timeout, stream=stream, **kw)
+    except requests.ConnectionError as e:
+        raise SubmitError(
+            f"Could not reach the TPU submission service at {SERVICE_URL}. "
+            f"It may be restarting; try again in a minute. ({e.__class__.__name__})"
+        ) from None
+    if resp.status_code >= 400:
+        try:
+            message = resp.json().get("error") or resp.text
+        except ValueError:
+            message = resp.text or resp.reason
+        raise SubmitError(f"{message} (HTTP {resp.status_code})")
+    return resp
 
 
-def _namespace() -> str:
-    """Get the namespace this notebook pod runs in.
+def _job_id(job) -> str:
+    if isinstance(job, Job):
+        return job.id
+    if isinstance(job, dict):
+        return job["id"]
+    return str(job)
 
-    Returns:
-        str: The Kubernetes namespace string. Defaults to "default" if unresolvable.
+
+def _latest(active_only: bool = False) -> str:
+    jobs_ = _call("GET", "/api/jobs").json()["jobs"]
+    for j in jobs_:
+        if not active_only or j["state"] in ("queued", "starting", "running"):
+            return j["id"]
+    raise SubmitError("You have no active jobs." if active_only else "You have no jobs yet.")
+
+
+# ---------------------------------------------------------------------- packing
+
+def _excluded(rel: Path, is_dir: bool) -> bool:
+    name = rel.name
+    if is_dir:
+        if len(rel.parts) == 1 and any(fnmatch.fnmatch(name, pat) for pat in EXCLUDE_TOP_DIRS):
+            return True
+        return name in EXCLUDE_DIRS
+    return any(fnmatch.fnmatch(name, pat) for pat in EXCLUDE_FILES)
+
+
+def collect_files(root: str | os.PathLike) -> list[tuple[Path, int]]:
+    """Files submit() would send from root, as (relative path, size). Symlinks are skipped."""
+    root = Path(root)
+    out: list[tuple[Path, int]] = []
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        base = Path(dirpath)
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if not (base / d).is_symlink() and not _excluded((base / d).relative_to(root), True)
+        )
+        for fname in sorted(filenames):
+            path = base / fname
+            rel = path.relative_to(root)
+            if path.is_symlink() or not path.is_file() or _excluded(rel, False):
+                continue
+            out.append((rel, path.stat().st_size))
+    return out
+
+
+def pack(root: str | os.PathLike, dest: str | os.PathLike, max_mb: int = MAX_SNAPSHOT_MB) -> list[Path]:
+    """Write root's sendable files to dest as .tar.gz. Returns the paths packed."""
+    root = Path(root)
+    files = collect_files(root)
+    total = sum(size for _, size in files)
+    if total > max_mb * 1024 * 1024:
+        biggest = sorted(files, key=lambda f: f[1], reverse=True)[:5]
+        listing = "\n".join(f"  {size / 2**20:8.1f} MB  {rel}" for rel, size in biggest)
+        raise SubmitError(
+            f"{root} has {total / 2**20:.0f} MB of files to send; the limit is {max_mb} MB. "
+            f"Largest:\n{listing}\nMove data and old outputs out of this folder, or into a "
+            f"folder named data/ or expts/, which are never sent."
+        )
+
+    def reset(info: tarfile.TarInfo) -> tarfile.TarInfo:
+        info.uid = info.gid = 1000
+        info.uname = info.gname = ""
+        return info
+
+    with tarfile.open(dest, "w:gz", compresslevel=6) as tar:
+        for rel, _ in files:
+            tar.add(root / rel, arcname=rel.as_posix(), recursive=False, filter=reset)
+    return [rel for rel, _ in files]
+
+
+# ------------------------------------------------------------------- public API
+
+def submit(
+    script: str,
+    args=(),
+    env: dict | None = None,
+    dataset: str | None = "default",
+    resume_from=None,
+    root: str | None = None,
+    follow: bool = False,
+) -> Job:
+    """Queue `python <script> <args>` on one TPU chip. Returns the Job.
+
+    script       path to the .py file, relative to the current folder or absolute
+    args         command-line arguments for the script
+    env          extra environment variables, e.g. {"WANDB_API_KEY": key}
+    dataset      which course dataset to unpack on the chip ("default", a name, or None)
+    resume_from  an earlier job whose expts/ folder this job starts from
+    root         folder to send; defaults to the script's folder
+    follow       watch the log right away
     """
-    path = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
-    if os.path.exists(path):
-        with open(path) as fh:
-            return fh.read().strip()
-    return os.environ.get("POD_NAMESPACE", "default")
-
-
-def _load() -> None:
-    """Load the Kubernetes configuration.
-    
-    Attempts to load the in-cluster config first, falling back to a local
-    kubeconfig file if running outside a cluster.
-    """
+    script_path = Path(script).expanduser().resolve()
+    if not script_path.is_file():
+        raise SubmitError(f"{script} does not exist.")
+    root_path = Path(root).expanduser().resolve() if root else script_path.parent
     try:
-        config.load_incluster_config()
-    except config.ConfigException:
-        config.load_kube_config()
+        rel_script = script_path.relative_to(root_path).as_posix()
+    except ValueError:
+        raise SubmitError(f"{script} is not inside {root_path}.") from None
+    if _excluded(Path(rel_script), False):
+        raise SubmitError(f"{rel_script} matches an excluded pattern and would not be sent.")
+
+    spec = {
+        "script": rel_script,
+        "args": [str(a) for a in args],
+        "env": {str(k): str(v) for k, v in (env or {}).items()},
+        "dataset": dataset,
+        "resume_from": _job_id(resume_from) if resume_from else None,
+    }
+    if any(not v for v in spec["env"].values()):
+        empty = [k for k, v in spec["env"].items() if not v]
+        print(f"warning: env {', '.join(empty)} is empty", file=sys.stderr)
+
+    _call("POST", "/api/preflight", json=spec)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        snapshot = Path(tmp) / "snapshot.tar.gz"
+        packed = pack(root_path, snapshot)
+        size = snapshot.stat().st_size
+        print(f"packed {len(packed)} files from {root_path} ({size / 2**20:.1f} MB)", flush=True)
+        with snapshot.open("rb") as fh:
+            upload = _call(
+                "PUT", "/api/uploads", data=fh, timeout=(10, 600),
+                headers={"Content-Type": "application/gzip"},
+            ).json()
+
+    info = _call("POST", "/api/jobs", json={**spec, "upload_id": upload["upload_id"]}).json()
+    job = Job(info["id"], info)
+    print(f"submitted job {job.id}: python {rel_script} {' '.join(spec['args'])}".rstrip(), flush=True)
+    if follow:
+        watch(job)
+    else:
+        print(f"watch it with submit_tpu.watch('{job.id}')", flush=True)
+    return job
 
 
-def run(code: str, timeout: int = 28800, keep: bool = False) -> str:
-    """Run code on one v5e chip. Blocks until it finishes and returns stdout.
+def status(job=None) -> dict | list[dict]:
+    """With a job: its status. Without: print and return all your jobs."""
+    if job is not None:
+        return _call("GET", f"/api/jobs/{_job_id(job)}").json()
+    jobs_ = _call("GET", "/api/jobs").json()["jobs"]
+    me = usage()
+    if not jobs_:
+        print("no jobs yet")
+    for j in jobs_:
+        extra = f"  #{j['position']} in line" if j.get("position") else ""
+        print(f"{j['id']}  {j['state']:<10} {j['chip_hours']:6.2f} chip-h  {j['script']}{extra}")
+    budget = me.get("chip_hour_budget")
+    used = me.get("chip_hours_used", 0)
+    print(f"chip-hours used: {used:.2f}" + (f" of {budget:g}" if budget else ""))
+    return jobs_
 
-    The timeout covers the entire wait: queue time plus node provisioning 
-    plus the actual execution run. A cold chip can take several minutes to 
-    arrive, which is normal.
 
-    The job name is deterministic (one per student). If a previous job with the
-    same name is still running, the create call will fail with 409 Conflict,
-    which prevents a student from hogging multiple chips at once.
+def jobs() -> list[dict]:
+    """Your jobs, newest first, without printing."""
+    return _call("GET", "/api/jobs").json()["jobs"]
 
-    Args:
-        code (str): The python code to execute on the TPU.
-        timeout (int, optional): The maximum time in seconds to wait. Defaults to 28800 (8 hours).
-        keep (bool, optional): Whether to keep the Job object around after execution instead of deleting it. Defaults to False.
 
-    Returns:
-        str: The standard output logs from the pod execution.
+def usage() -> dict:
+    """Chip-hours used, your budget, and the datasets available."""
+    return _call("GET", "/api/me").json()
 
-    Raises:
-        JobInterrupted: If the job is deleted from the cluster while waiting.
-        RuntimeError: If the job execution fails.
-        TimeoutError: If the job does not complete within the timeout.
+
+def cancel(job=None) -> dict:
+    """Stop a job (default: your active one). Its uploaded files stay downloadable."""
+    job_id = _job_id(job) if job is not None else _latest(active_only=True)
+    info = _call("DELETE", f"/api/jobs/{job_id}").json()
+    print(f"job {job_id}: {info['state']}")
+    return info
+
+
+def logs(job=None) -> str:
+    """The whole log so far, as a string."""
+    job_id = _job_id(job) if job is not None else _latest()
+    return _call("GET", f"/api/jobs/{job_id}/logs").json()["data"]
+
+
+def watch(job=None, poll: float = 10.0) -> dict:
+    """Print the job's log as it arrives until it finishes. Returns the final status.
+
+    Stopping this cell only stops watching. The job keeps running; cancel() stops it.
     """
-    _load()
-    ns = _namespace()
-    name = f"tpu-{os.environ.get('JUPYTERHUB_USER', 'anon')}"
-    name = name.replace("_", "-").lower()[:63]
-
-    batch = client.BatchV1Api()
-    core = client.CoreV1Api()
-
-    job = client.V1Job(
-        metadata=client.V1ObjectMeta(
-            name=name,
-            namespace=ns,
-            # This label sends the job to Kueue. Without it the pod schedules at once,
-            # and 300 students overload the pool together.
-            labels={"kueue.x-k8s.io/queue-name": QUEUE},
-        ),
-        spec=client.V1JobSpec(
-            # Kueue owns admission; it unsuspends when a chip is free.
-            suspend=True,
-            backoff_limit=0,
-            ttl_seconds_after_finished=None if keep else 600,
-            template=client.V1PodTemplateSpec(
-                spec=client.V1PodSpec(
-                    restart_policy="Never",
-                    # Fungible: yields to notebooks, Kueue re-queues it.
-                    priority_class_name="student-tpu-job",
-                    node_selector={
-                        "cloud.google.com/gke-tpu-accelerator": TPU_ACCELERATOR,
-                        "cloud.google.com/gke-tpu-topology": TPU_TOPOLOGY,
-                    },
-                    tolerations=[
-                        client.V1Toleration(
-                            key="google.com/tpu", operator="Exists", effect="NoSchedule"
-                        )
-                    ],
-                    containers=[
-                        client.V1Container(
-                            name="hw",
-                            image=TPU_IMAGE,
-                            command=["python3", "-c", code],
-                            # Fail loudly instead of silently falling back to CPU. A
-                            # CPU fallback produces plausible numbers that are wrong.
-                            env=[client.V1EnvVar(name="JAX_PLATFORMS", value="tpu")],
-                            resources=client.V1ResourceRequirements(
-                                limits={"google.com/tpu": "1"},
-                                requests={"google.com/tpu": "1"},
-                            ),
-                            security_context=client.V1SecurityContext(
-                                run_as_user=1000,
-                                run_as_group=1000,
-                                run_as_non_root=True,
-                                allow_privilege_escalation=False,
-                                capabilities=client.V1Capabilities(drop=["ALL"]),
-                            ),
-                        )
-                    ],
-                )
-            ),
-        ),
-    )
-
-    batch.create_namespaced_job(ns, job)
-    print(f"submitted {name} to queue '{QUEUE}'", flush=True)
-
-    t0 = time.time()
-    admitted_at = None
-    last_heartbeat = t0
-
+    job_id = _job_id(job) if job is not None else _latest()
+    offset, pod, last_line = 0, None, None
     try:
-        while time.time() - t0 < timeout:
-            try:
-                j = batch.read_namespaced_job(name, ns)
-            except ApiException as e:
-                # Someone deleted the job while we were waiting: a TA clearing a stuck
-                # queue, a TTL sweep, a kubectl delete. That is an interruption, not a
-                # failure of the student's code, so say so plainly instead of letting a
-                # raw 404 traceback end the cell.
-                if e.status == 404:
-                    raise JobInterrupted(
-                        f"{name} was deleted while waiting for a chip. Nothing ran. "
-                        f"Re-run the cell to submit again."
-                    ) from None
-                raise
-
-            if admitted_at is None and not j.spec.suspend:
-                admitted_at = time.time()
-                print(f"  admitted after {admitted_at - t0:.0f}s in queue", flush=True)
-            elif admitted_at is None and (time.time() - last_heartbeat) >= 30:
-                elapsed = int(time.time() - t0)
-                print(f"  [Queue Update] Still waiting for TPU allocation ({elapsed}s elapsed)...", flush=True)
-                last_heartbeat = time.time()
-
-            pods = core.list_namespaced_pod(
-                ns, label_selector=f"job-name={name}"
-            ).items
-            if pods:
-                phase = pods[0].status.phase
-                if phase in ("Succeeded", "Failed"):
-                    out = core.read_namespaced_pod_log(pods[0].metadata.name, ns)
-                    print(f"  {phase} after {time.time() - t0:.0f}s total", flush=True)
-                    if not keep:
-                        _delete(batch, name, ns)
-                    if phase == "Failed":
-                        raise RuntimeError(f"job failed:\n{out}")
-                    return out
-                elif phase == "Pending" and (time.time() - last_heartbeat) >= 30:
-                    elapsed = int(time.time() - t0)
-                    print(f"  [Starting] TPU container initializing ({elapsed}s elapsed)...", flush=True)
-                    last_heartbeat = time.time()
-            elif admitted_at is not None and (time.time() - last_heartbeat) >= 30:
-                elapsed = int(time.time() - t0)
-                print(f"  [Node Build] TPU node provisioning in progress ({elapsed}s elapsed)...", flush=True)
-                last_heartbeat = time.time()
-
-            time.sleep(5)
-
+        while True:
+            r = _call("GET", f"/api/jobs/{job_id}/logs", params={"offset": offset, "pod": pod or ""}).json()
+            info = r["job"]
+            if r["pod"] != pod and r["source"] == "pod" and pod is not None:
+                print(f"\n--- job restarted on a new chip ({r['pod']}); resuming from its last checkpoint ---\n", flush=True)
+            if r["data"]:
+                sys.stdout.write(r["data"])
+                sys.stdout.flush()
+            offset, pod = r["offset"], r["pod"]
+            line = f"[{job_id}] {info['state']}"
+            if info.get("position"):
+                line += f", #{info['position']} in line"
+            if line != last_line:
+                print(line, flush=True)
+                last_line = line
+            if r["done"]:
+                if info.get("detail"):
+                    print(info["detail"], flush=True)
+                print(f"finished: {info['state']} after {info['chip_hours']:.2f} chip-hours. "
+                      f"submit_tpu.pull('{job_id}') downloads the results.", flush=True)
+                return info
+            time.sleep(poll)
     except KeyboardInterrupt:
-        # Ctrl-C stops the poller, not the job. Without this the Job keeps its place in
-        # the queue and can still take a chip with nobody watching for the result.
-        print(f"  interrupted; deleting {name}", flush=True)
-        _delete(batch, name, ns)
-        raise
+        print(f"\nstopped watching. Job {job_id} is still running; "
+              f"submit_tpu.cancel('{job_id}') stops it.", flush=True)
+        return status(job_id)
 
-    _delete(batch, name, ns)
-    raise TimeoutError(
-        f"{name} did not finish within {timeout}s. The pool is busy or the zone is "
-        f"out of v5e. Check: kubectl get workloads -n {ns}"
-    )
+
+def files(job=None) -> list[dict]:
+    """Files the job has uploaded so far (job.log and expts/...)."""
+    job_id = _job_id(job) if job is not None else _latest()
+    return _call("GET", f"/api/jobs/{job_id}/files").json()["files"]
+
+
+def pull(job=None, dest: str | os.PathLike | None = None, pattern: str = "*") -> Path:
+    """Download the job's uploaded files into dest (default ./tpu_runs/<job id>/).
+
+    Files already downloaded at the same size are skipped, so pulling again during a run
+    fetches only what changed. `pattern` filters paths, e.g. "*results.csv".
+    """
+    job_id = _job_id(job) if job is not None else _latest()
+    dest = Path(dest) if dest else Path("tpu_runs") / job_id
+    listing = [f for f in files(job_id) if fnmatch.fnmatch(f["path"], pattern)]
+    fetched = 0
+    for f in listing:
+        target = dest / f["path"]
+        if target.is_file() and target.stat().st_size == f["size"] and f["path"] != "job.log":
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".part")
+        with _call("GET", f"/api/jobs/{job_id}/files/{f['path']}", stream=True, timeout=(10, 600)) as r:
+            with tmp.open("wb") as out:
+                for chunk in r.iter_content(chunk_size=1 << 20):
+                    out.write(chunk)
+        tmp.replace(target)
+        fetched += 1
+    print(f"{fetched} new or changed files of {len(listing)} in {dest}", flush=True)
+    return dest
+
+
+__all__ = [
+    "Job", "SubmitError", "submit", "watch", "status", "jobs", "usage", "cancel",
+    "logs", "files", "pull", "collect_files", "pack",
+]

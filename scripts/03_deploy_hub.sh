@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: 03_deploy_hub.sh
-# Description: Install JupyterHub and give student notebooks permission to submit TPU Jobs.
+# Description: Deploy the TPU submission service, then JupyterHub.
 #
-# The RBAC below is the security boundary of the classroom. A student notebook can
-# create, watch and delete Jobs in its own namespace and read their logs. It cannot
+# The submission service is the security boundary of the classroom. Students have no
+# Kubernetes permissions and their notebooks carry no Kubernetes token. They send a
+# script folder to tpu-submit with their JupyterHub token, and tpu-submit builds every
+# Job from one fixed template: one chip, the course image, the queue, a deadline. A
+# student cannot pick a node, an image, or a service account, and cannot see or touch
+# anyone else's jobs, logs, or files. Student code is untrusted; treat it that way.
 # ==============================================================================
-# touch another namespace, cannot create a Job with a node selector of its choosing
-# outside what the pod template allows, and cannot edit the ClusterQueue that caps
-# the pool. Student code is untrusted; treat it that way.
 source "$(dirname "$0")/common.sh"
 require_project
 check_prereqs gcloud kubectl helm
@@ -18,71 +19,51 @@ CHART_VERSION="${CHART_VERSION:-4.4.1}"
 
 ensure_k8s_context
 
-log_header "Configuring Student RBAC in Namespace '${NAMESPACE}'"
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: student
-  namespace: ${NAMESPACE}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: student-tpu-submit
-  namespace: ${NAMESPACE}
-rules:
-  - apiGroups: ["batch"]
-    resources: ["jobs"]
-    verbs: ["create", "get", "list", "watch", "delete"]
-  - apiGroups: [""]
-    resources: ["pods", "pods/log"]
-    verbs: ["get", "list", "watch"]
-  # Read-only on their own queued work, so a student can see their place in line.
-  - apiGroups: ["kueue.x-k8s.io"]
-    resources: ["workloads", "localqueues"]
-    verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: student-tpu-submit
-  namespace: ${NAMESPACE}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: student-tpu-submit
-subjects:
-  - kind: ServiceAccount
-    name: student
-    namespace: ${NAMESPACE}
-EOF
+# Earlier versions gave every notebook a service account that could create, list, and
+# delete any Job in the namespace and read every pod's logs. Remove it.
+log_header "Removing direct Kubernetes access from student notebooks"
+kubectl -n "${NAMESPACE}" delete rolebinding student-tpu-submit --ignore-not-found
+kubectl -n "${NAMESPACE}" delete role student-tpu-submit --ignore-not-found
+kubectl -n "${NAMESPACE}" delete serviceaccount student --ignore-not-found
+
+log_header "Deploying the TPU submission service"
+if [[ -n "${DEFAULT_DATASET}" && ",${DATASETS}," != *",${DEFAULT_DATASET}="* ]]; then
+  log_error "DEFAULT_DATASET=${DEFAULT_DATASET} is not one of DATASETS (${DATASETS:-empty})"
+  exit 1
+fi
+if [[ -z "${DATASETS}" ]]; then
+  log_warn "DATASETS is empty: jobs will run without a dataset. See scripts/12_setup_storage.sh."
+fi
+if ! gcloud storage buckets describe "gs://${STUDENT_BUCKET}" --project="${PROJECT}" >/dev/null 2>&1; then
+  log_error "gs://${STUDENT_BUCKET} does not exist. Run make storage first."
+  exit 1
+fi
+log_info "service image: ${SUBMIT_IMAGE}"
+log_info "job image:     ${TPU_JOB_IMAGE}"
+sed -e "s|__NAMESPACE__|${NAMESPACE}|g" \
+    -e "s|__SUBMIT_IMAGE__|${SUBMIT_IMAGE}|g" \
+    -e "s|__TPU_JOB_IMAGE__|${TPU_JOB_IMAGE}|g" \
+    -e "s|__STUDENT_BUCKET__|${STUDENT_BUCKET}|g" \
+    -e "s|__DATASETS__|${DATASETS}|g" \
+    -e "s|__DEFAULT_DATASET__|${DEFAULT_DATASET}|g" \
+    -e "s|__TPU_ACCELERATOR__|${TPU_ACCELERATOR}|g" \
+    -e "s|__TPU_TOPOLOGY__|${TPU_TOPOLOGY}|g" \
+    -e "s|__MAX_JOB_HOURS__|${MAX_JOB_HOURS}|g" \
+    -e "s|__CHIP_HOUR_BUDGET__|${CHIP_HOUR_BUDGET}|g" \
+    -e "s|__JOB_DISK__|${JOB_DISK}|g" \
+    "${REPO_ROOT}/k8s/tpu-submit.yaml" | kubectl apply -f -
+# Settings live in the pod spec, so a config change rolls the pod by itself; an image
+# rebuild under the same tag does not, hence the explicit restart.
+kubectl -n "${NAMESPACE}" rollout restart deployment/tpu-submit
+kubectl -n "${NAMESPACE}" rollout status deployment/tpu-submit --timeout=10m
 
 echo "==> helm repo"
 helm repo add jupyterhub https://hub.jupyter.org/helm-chart/ >/dev/null 2>&1 || true
 helm repo update >/dev/null
 
-# The singleuser NetworkPolicy has to name the API server's real endpoint, because
-# Dataplane V2 applies policy after the Service DNAT and the ClusterIP never matches.
-# Resolve it via modern discovery.k8s.io/v1 EndpointSlices with fallback to v1 Endpoints.
-APISERVER=$(kubectl get endpointslices -n default -l kubernetes.io/service-name=kubernetes \
-              -o jsonpath='{.items[0].endpoints[0].addresses[0]}' 2>/dev/null \
-            || kubectl get endpoints kubernetes -n default \
-              -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || true)
-if [[ -z "${APISERVER}" ]]; then
-  echo "could not resolve the API server endpoint; student notebooks will not be able" >&2
-  echo "to submit TPU jobs. Check: kubectl get endpointslices -n default" >&2
-  exit 1
-fi
-echo "==> API server endpoint ${APISERVER} (not the ClusterIP -- see the values file)"
-
-VALUES=$(mktemp)
-trap 'rm -f "${VALUES}"' EXIT
-sed "s|__APISERVER_ENDPOINT__|${APISERVER}|" \
-  "$(dirname "$0")/../k8s/jupyterhub-values.yaml" > "${VALUES}"
-
-IMAGE_NAME="${REGION}-docker.pkg.dev/${PROJECT}/course-images/scipy-notebook"
-IMAGE_TAG="latest"
+VALUES="${REPO_ROOT}/k8s/jupyterhub-values.yaml"
+IMAGE_NAME="${NOTEBOOK_IMAGE%:*}"
+IMAGE_TAG="${NOTEBOOK_IMAGE##*:}"
 
 ADMIN_USERS="${ADMIN_USERS:-instructor}"
 ADMIN_LIST=()

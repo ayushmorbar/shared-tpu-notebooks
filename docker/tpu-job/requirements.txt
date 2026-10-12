@@ -1,0 +1,14 @@
+# Added on top of the JAX TPU base image, which already has jax, flax, optax, orbax.
+# torch is installed separately from the CPU-only index (see Dockerfile); HW3 uses it
+# only for torch.utils.data.DataLoader.
+tokenizers==0.21.0
+Levenshtein>=0.25.0
+jiwer>=3.0.0
+wandb>=0.19.0
+pyyaml>=6.0
+pandas>=2.1.0
+tqdm>=4.66.0
+matplotlib>=3.8.0
+scipy>=1.11.0
+requests>=2.31
+google-cloud-storage>=2.16

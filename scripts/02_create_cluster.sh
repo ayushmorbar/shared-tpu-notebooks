@@ -55,6 +55,18 @@ else
   else
     log_info "Log exclusion filter already exists or updated."
   fi
+  # TPU job pods (tpu-<user>-<job id>-xxxxx). Their output is already kept in the
+  # student bucket as job.log by the job wrapper, so Cloud Logging would bill for a
+  # second copy. The pattern needs the job id, so the tpu-submit service's own logs
+  # (tpu-submit-<hash>) are kept.
+  if gcloud logging sinks update "_Default" \
+    --project="${PROJECT}" \
+    --add-exclusion="name=student-tpu-job-noise,filter=resource.labels.namespace_name=\"${NAMESPACE:?}\" AND resource.labels.pod_name=~\"^tpu-.+-[0-9]{8}-[0-9]{6}-[0-9a-f]{4}-\"" \
+    2>/dev/null; then
+    log_success "Log exclusion filter active for TPU job pods."
+  else
+    log_info "TPU job log exclusion already exists or updated."
+  fi
 fi
 
 log_header "Installing Kueue ${KUEUE_VERSION}"
@@ -132,7 +144,9 @@ metadata:
   namespace: ${NAMESPACE}
 spec:
   hard:
-    count/jobs.batch: "60"
+    # One active TPU job per student, plus finished Jobs waiting out their one-hour
+    # TTL (tpu-submit JOB_TTL_SECONDS). Past this, submissions fail with a quota error.
+    count/jobs.batch: "$((STUDENTS * 2 + 20))"
     count/pods: "100"
     count/persistentvolumeclaims: "40"
     # Sized for 25 student home volumes x 32Gi (800Gi) with 1Ti quota headroom

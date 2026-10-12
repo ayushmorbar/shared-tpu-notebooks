@@ -31,8 +31,13 @@ scikit-learn==1.9.0
 # experiments, and reports.
 matplotlib==3.11.1
 
-# Infrastructure / Scripting
-kubernetes
+# HW3P2 libraries, so the unit tests run in the CPU notebook before a TPU submit.
+tokenizers==0.21.0
+Levenshtein>=0.25.0
+jiwer>=3.0.0
+
+# HTTP client for submit_tpu.py (the TPU submission service).
+requests
 
 # ------------------------------------------------------------
 # General utilities

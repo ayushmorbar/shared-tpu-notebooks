@@ -31,12 +31,12 @@ Before provisioning resources, verify that your region has the required quotas f
 make preflight PROJECT=my-project-id
 ```
 
-## 3. The 4-Step Deployment
+## 3. The 5-Step Deployment
 
 Run these steps in order. Each script has detailed error handling and will abort safely if an issue occurs.
 
-### Step A: Build the Custom Docker Image
-The course image contains JAX, PyTorch, and the Kubernetes client.
+### Step A: Build the Images
+Three images: the CPU notebook (JAX, PyTorch, and the HW libraries for local unit tests), the TPU job image students' scripts run in, and the tpu-submit service.
 ```bash
 make image
 ```
@@ -47,13 +47,21 @@ Creates a GKE Autopilot cluster, configures Kueue, and sets up StorageClasses. (
 make cluster
 ```
 
-### Step C: Deploy JupyterHub
-Installs the Zero-to-JupyterHub Helm chart with our custom security profiles.
+### Step C: Create the Buckets
+One bucket for job files (snapshots, logs, checkpoints) that only the tpu-submit service can use, and one for datasets that only TPU jobs can read. Then upload each assignment's dataset once:
+```bash
+make storage
+bash scripts/12_setup_storage.sh upload hw3p2 /path/to/hw3p2_data
+```
+Paste the `DATASETS=` and `DEFAULT_DATASET=` lines it prints into `config.env`.
+
+### Step D: Deploy the Submission Service and JupyterHub
+Deploys tpu-submit, then installs the Zero-to-JupyterHub Helm chart with our custom security profiles. Re-run it after changing any `config.env` value in the TPU Job Submission section.
 ```bash
 make hub
 ```
 
-### Step D: Secure with IAP (HTTPS)
+### Step E: Secure with IAP (HTTPS)
 Replaces insecure port-forwarding with Google SSO Identity-Aware Proxy.
 ```bash
 make iap
@@ -72,6 +80,15 @@ make smoke
 ```
 
 If it prints `devices: [TpuDevice(id=0, ...)]`, your TPU pool is fully operational!
+
+Then test the path students use, through the submission service. Sign in to the hub, open `https://<your hub>/hub/token`, create a token, and run:
+
+```bash
+HUB_TOKEN=<token> make smoke-submit
+HUB_TOKEN=<token> SMOKE_DATASET=hw3p2 make smoke-submit   # also checks the dataset unpacks
+```
+
+It submits a one-file script with the same `submit_tpu.py` students use, watches it, and downloads its `expts/` folder.
 
 ---
 

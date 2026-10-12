@@ -1,0 +1,4 @@
+# make test
+pytest>=8
+tornado>=6.4,<7
+requests>=2.31,<3

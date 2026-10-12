@@ -59,3 +59,12 @@ for Z in ${SPRAY_ZONES}; do
 done
 echo
 echo "Empty output under all three headings means you are clean."
+echo
+# Deliberately not deleted: they hold students' checkpoints and the course datasets,
+# and a cluster rebuild reuses them. They bill for storage until removed by hand.
+for B in "${STUDENT_BUCKET}" "${DATASET_BUCKET}"; do
+  if gcloud storage buckets describe "gs://${B}" --project="${PROJECT}" >/dev/null 2>&1; then
+    echo "--- kept: gs://${B} (storage still bills; delete with: gcloud storage rm -r gs://${B}) ---"
+    gcloud storage du -s "gs://${B}" 2>/dev/null || true
+  fi
+done

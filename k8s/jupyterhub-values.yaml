@@ -11,8 +11,10 @@
 # the browser tab is open, whether the student is running code or reading the
 # assignment. For 300 students that is $405/hr, and most of them are typing.
 #
-# So students get a CPU notebook, and TPU work leaves the notebook as a queued Job
-# (see notebooks/submit_tpu.py). The chip is held for the seconds the job runs.
+# So students get a CPU notebook, and TPU work leaves the notebook as a queued Job.
+# notebooks/submit_tpu.py sends the student's script folder to the tpu-submit service
+# (k8s/tpu-submit.yaml), which is the only thing allowed to create Jobs. The chip is
+# held for as long as the job runs, not for as long as the notebook is open.
 #
 # The pinned TPU notebook still exists, because interactive TPU debugging is a real
 # need. It is restricted to staff. That restriction is the cost control.
@@ -43,6 +45,30 @@ hub:
       #   --member=group:students@your-university.edu \
       #   --role=roles/iap.httpsResourceAccessor
       allow_all: true
+    # The token JupyterHub puts in every notebook (JUPYTERHUB_API_TOKEN) carries only
+    # these scopes. The last one lets the notebook call the tpu-submit service, which
+    # checks it by asking the hub who owns the token (GET /hub/api/user).
+    Spawner:
+      server_token_scopes:
+        - "users:activity!user"
+        - "access:servers!server"
+        - "access:services!service=tpu-submit"
+    # Notebooks get no Kubernetes credential. Students submit TPU work through the
+    # tpu-submit service, never to the Kubernetes API.
+    KubeSpawner:
+      automount_service_account_token: false
+  # Registers the TPU submission service by name so the scope above can refer to it.
+  # It has no URL here: notebooks reach it directly at TPU_SUBMIT_URL, not through the
+  # hub's proxy, and it needs no hub API token of its own.
+  services:
+    tpu-submit:
+      display: false
+  # A token can only hold scopes its owner has, so users need the service scope too.
+  loadRoles:
+    user:
+      scopes:
+        - "self"
+        - "access:services!service=tpu-submit"
   # Trust the identity IAP already verified, instead of asking the user again.
   #
   # IAP authenticates at the load balancer and forwards the result as a header:
@@ -278,30 +304,22 @@ singleuser:
     blockWithIptables: false
 
   # z2jh puts a NetworkPolicy on singleuser pods that denies egress to private IP
-  # ranges. That is a good default and it breaks this design, because submit_tpu.py
-  # talks to the Kubernetes API server to create its Job and the API server sits on a
-  # private address. The symptom is a bare connect timeout to the API ClusterIP, with
-  # nothing in the hub log, because the packet is dropped rather than refused.
+  # ranges. That is a good default, and it means the notebook cannot reach the
+  # tpu-submit service, which has a private pod address. The symptom is a bare connect
+  # timeout, with nothing in any log, because the packet is dropped rather than refused.
   #
-  # Open exactly the API server and nothing else. Do NOT reach for privateIPs: true --
-  # that would let student code talk to every other pod and node in the cluster,
-  # including other students' notebooks.
+  # Open exactly the tpu-submit pods and nothing else. Do NOT reach for
+  # privateIPs: true -- that would let student code talk to every other pod and node in
+  # the cluster, including other students' notebooks.
   #
-  # Allow the API server's REAL ENDPOINT, not its ClusterIP. This is the part that
-  # costs an hour if you get it wrong.
+  # Select the PODS, not the Service's ClusterIP. GKE Dataplane V2 (Cilium) evaluates
+  # egress policy after the Service DNAT, so by the time policy runs the destination is
+  # already a pod IP. A podSelector matches that; an ipBlock for the ClusterIP never
+  # would.
   #
-  # GKE Dataplane V2 (Cilium) evaluates egress policy AFTER the Service DNAT. A rule
-  # permitting the `kubernetes` ClusterIP 34.118.224.1 therefore never matches: by the
-  # time policy runs, the destination has already been rewritten to the master's
-  # private endpoint, which lands inside the 10.0.0.0/8 block that z2jh's catch-all
-  # rule explicitly excepts. The packet is dropped and the client sees a bare connect
-  # timeout to the ClusterIP, which points at the wrong address entirely.
-  #
-  # Get the endpoint, not the Service IP:
-  #   kubectl get endpoints kubernetes -n default -o jsonpath='{.subsets[0].addresses[0].ip}'
-  #
-  # It is stable for the life of the cluster. 02_create_cluster.sh prints it, and
-  # 03_deploy_hub.sh substitutes it, so this value is not hand-maintained.
+  # Notebooks do not talk to the Kubernetes API at all any more. The earlier design
+  # allowed the API server endpoint here so submit_tpu.py could create Jobs itself;
+  # that let any student create, read, or delete anyone's Jobs and logs.
   networkPolicy:
     enabled: true
     egressAllowRules:
@@ -309,11 +327,12 @@ singleuser:
       privateIPs: false
     egress:
       - to:
-          - ipBlock:
-              cidr: __APISERVER_ENDPOINT__/32
+          - podSelector:
+              matchLabels:
+                app.kubernetes.io/name: tpu-submit
         ports:
           - protocol: TCP
-            port: 443
+            port: 8080
 
   storage:
     type: dynamic
@@ -326,9 +345,6 @@ singleuser:
     capacity: 32Gi
     dynamic:
       storageClass: standard-rwo-retain
-  # Service account the notebook uses to submit TPU Jobs. Bound by RBAC in
-  # 03_deploy_hub.sh to create Jobs in its own namespace and nothing else.
-  serviceAccountName: student
   # A notebook holds live state and a person is waiting on it. TPU jobs are fungible and
   # get student-tpu-job (100) instead, so chips yield and sessions do not. Before this,
   # everything sat at priority 0 and a running notebook was evicted mid-session during a
@@ -339,7 +355,8 @@ singleuser:
     # cannot use gVisor, so this is disabled on the Pinned TPU profile.
     runtimeClassName: gvisor
   extraEnv:
-    KUEUE_LOCAL_QUEUE: "tpu"
+    # Where submit_tpu.py sends jobs. Same namespace, so the short Service name resolves.
+    TPU_SUBMIT_URL: "http://tpu-submit:8080"
     # submit_tpu.py is mounted here rather than into /home/jovyan, because the home
     # directory is a PVC and a ConfigMap mount would fight it.
     PYTHONPATH: "/opt/course"
@@ -352,12 +369,9 @@ singleuser:
     hw0_tpu_hello.ipynb:
       mountPath: /opt/course/hw0_tpu_hello.ipynb
       stringData: "placeholder, replaced at deploy time"
-  # Two jobs at spawn.
+  # Copy the hello-world assignment into the student's home directory at spawn.
   #
-  # 1. Install the kubernetes client. The scipy-notebook image has none and
-  #    submit_tpu.py needs one. Bake this into a course image for a real term.
-  #
-  # 2. Copy the assignment into the student's home directory. extraFiles mounts are
+  #    extraFiles mounts are
   #    read-only ConfigMap volumes, so the notebook cannot live in /home/jovyan
   #    directly -- the home directory is a PVC and the two would fight. Mount it under
   #    /opt/course and copy on first spawn instead.
@@ -380,8 +394,9 @@ singleuser:
   profileList:
     - display_name: "Course default (CPU notebook)"
       description: >-
-        2 vCPU, 16 GB RAM, 32 GiB home disk. Where you write and debug. Run TPU work from here with
-        submit_tpu.run(); the chip is attached only while your job runs.
+        2 vCPU, 16 GB RAM, 32 GiB home disk. Where you write and debug. Send training scripts
+        to a TPU chip from here with submit_tpu.submit(); the chip is attached only while
+        your job runs.
       default: true
       # Sized for CMU 11-785 HW2P2 image disk caching (~16 GiB uint8) with bursting headroom.
       # cpu_guarantee: 1 allows dense GKE Autopilot node packing while bursting to 2 vCPU.

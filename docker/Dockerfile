@@ -2,7 +2,7 @@ FROM quay.io/jupyter/scipy-notebook:2024-11-11
 
 USER root
 
-# Install dependencies needed for JAX/TPU and Kubernetes operations
+# Install dependencies needed for JAX/TPU
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     curl \
