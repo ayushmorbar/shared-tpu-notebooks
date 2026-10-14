@@ -25,7 +25,7 @@ TPU_IMAGE       ?= us-docker.pkg.dev/cloud-tpu-images/jax-ai-image/tpu:latest
 
 export PROJECT REGION CLUSTER NS NAMESPACE=$(NS) STUDENTS POOL_CHIPS WARM DOMAIN STUDENT_GROUP TA_GROUP ADMIN_USERS TEST_ACCOUNTS TPU_ACCELERATOR TPU_TOPOLOGY TPU_IMAGE
 
-.PHONY: check preflight cluster image hub iap warm-on warm-off demo smoke scale report expand-pvcs expand-pvcs-dry-run clean-pvcs clean-pvcs-dry-run secrets teardown venv help
+.PHONY: check preflight cluster image hub iap warm-on warm-off demo smoke scale report expand-pvcs expand-pvcs-dry-run clean-pvcs clean-pvcs-dry-run secrets teardown venv admin-list admin-grant admin-project help
 
 # Ensure the PROJECT variable is set before proceeding.
 check:
@@ -104,6 +104,22 @@ clean-pvcs-dry-run: check
 clean-pvcs: check
 	bash scripts/10_cleanup_pvcs.sh --execute
 
+# Admin & Student Grant Management (scripts/hub_admin.py)
+admin-list: check
+	python scripts/hub_admin.py list --namespace $(NS)
+
+admin-grant: check
+ifndef USER
+	$(error USER is not set. Usage: make admin-grant USER=student_id TIER=1)
+endif
+	python scripts/hub_admin.py grant $(USER) --tier $(or $(TIER),1) --namespace $(NS)
+
+admin-project: check
+ifndef TEAM
+	$(error TEAM is not set. Usage: make admin-project TEAM=team-name)
+endif
+	python scripts/hub_admin.py project $(TEAM)
+
 # Fully destroy the cluster, queued resources, static IPs, and stop all billing.
 teardown: check
 	bash scripts/99_teardown.sh
@@ -122,6 +138,9 @@ help:
 	@echo "  make report                  Generate analytics report from latest test run"
 	@echo "  make expand-pvcs-dry-run     Preview existing student PVCs to be resized (10Gi->32Gi)"
 	@echo "  make expand-pvcs             Dynamically resize existing PVCs to 32Gi online"
+	@echo "  make admin-list              List all student PVCs and storage usage via hub_admin.py"
+	@echo "  make admin-grant USER=.. TIER=..  Award Grant Tier (1: Capstone, 2: Fellow) to student"
+	@echo "  make admin-project TEAM=..   Scaffold shared team directory in Tartan storage"
 	@echo "  make clean-pvcs-dry-run      Preview retained PVCs & persistent disks"
 	@echo "  make clean-pvcs              Permanently delete retained PVCs & persistent disks"
 	@echo "  make teardown PROJECT=...    Destroy cluster, queued resources, and static IP"

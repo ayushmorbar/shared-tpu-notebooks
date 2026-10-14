@@ -1,57 +1,132 @@
-# 🛠️ Developer Guide
+# 🛠️ Developer & Maintainer Guide
 
-This guide is for teaching assistants, instructors, or system administrators who need to modify the codebase, adjust logic, or upgrade components.
+This guide is for teaching assistants, course maintainers, and system administrators who operate, customize, and extend the **CMU 11-785 Cloud TPU Hub** platform.
 
-## Directory Structure & Responsibilities
+---
 
-- **`docker/`**: Contains the Dockerfile and Python requirements. This image runs *both* the Jupyter Notebook environment and the TPU execution environment. 
-- **`k8s/`**: Kubernetes YAML manifests. Changes to security, quotas, and hub configuration happen here.
-- **`notebooks/`**: The Python client (`submit_tpu.py`) that students use to queue jobs.
-- **`scripts/`**: Bash utilities and python benchmarking scripts. **All scripts use `common.sh` for standardized logging and error handling.**
+## 1. Directory Structure & Key Components
 
-## Modifying the Bash Scripts
-
-We strictly enforce 2026 bash standards. When writing or editing scripts in `scripts/`:
-
-1. **Always source `common.sh`**:
-   ```bash
-   source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
-   ```
-2. **Use strict mode**: `set -euo pipefail` is mandatory.
-3. **Use log functions**: Do not use `echo`. Use `log_info`, `log_success`, `log_warn`, and `log_error`.
-4. **Use Docstrings**: Every bash script must start with a descriptive header block explaining its inputs, outputs, and side effects.
-
-## Modifying the Python Client (`submit_tpu.py`)
-
-If you add parameters to `submit_tpu.run()`:
-1. Ensure full type hints are provided.
-2. Update the Google-style docstrings.
-3. **Never** modify the Job spec to request privileges (`run_as_root`, `privileged: true`). GKE Autopilot's mutating admission webhook will reject it immediately.
-
-## Upgrading the JupyterHub Helm Chart
-
-To bump the JupyterHub version:
-1. Modify `scripts/03_deploy_hub.sh`.
-2. Update the `--version` flag in the `helm upgrade` command.
-3. Review the Zero-to-JupyterHub changelog, particularly around `singleuser.networkPolicy` and `Authenticator` configurations, as these frequently contain breaking changes.
-
-## Adding New Subsystems
-
-### System Diagram Context
-
-When adding new components (e.g., a grading service), consider how it interacts with the existing flow:
-
-```mermaid
-graph LR
-    Hub[JupyterHub Pod]
-    Grading[Autograder Service]
-    TPU[TPU Job]
-    
-    Hub -- "Submit Job" --> TPU
-    TPU -- "Stream Logs" --> Hub
-    Hub -- "Submit Grades" --> Grading
-    
-    style Grading stroke-dasharray: 5 5
+```
+shared-tpu-notebooks/
+├── Makefile                       # Entrypoint for infrastructure automation and admin CLI
+├── config.env.example             # Template for GCP project, region, cluster, and Tartan bucket
+├── docker/
+│   ├── Dockerfile                 # Custom Jupyter course container (JAX, PyTorch, K8s client)
+│   └── requirements.txt           # Base Python packages bundled into the image
+├── docs/                          # Comprehensive architectural and operational documentation
+├── k8s/
+│   ├── jupyterhub-values.yaml     # Production Helm values (RBAC, IAP, Tartan mounts, profiles)
+│   ├── jupyterhub-values-dev.yaml # Dev overlay (disables CSRF for local port-forwarding)
+│   ├── kueue-tpu-queues.yaml      # Multi-flavor Kueue queues (Flex and On-Demand TPU v5e)
+│   ├── priority-classes.yaml      # Kubernetes priority tiers (jupyterhub-core > student-notebook > job)
+│   ├── student-tpu-job.yaml       # Template Job manifest submitted by submit_tpu.py
+│   └── tpu-warm-pool.yaml         # Placeholder deployment & auto-scale-down cron
+├── notebooks/
+│   ├── submit_tpu.py              # User-facing client library for queuing batch TPU jobs
+│   ├── hw2p2_train.py             # Complete ResNet-34 ElasticFace training script for TPU v5e
+│   ├── train_hw2p2.py             # 2-minute infrastructure verification & smoke script
+│   ├── F26_HW2P2_JAX_TPU_Hub.ipynb# Production homework notebook with Tartan paths & submit_tpu
+│   └── student.env.template       # Isolated student credentials template (.env)
+└── scripts/
+    ├── common.sh                  # Shared logging, environment discovery, and k8s context
+    ├── hub_admin.py               # Administrative CLI and interactive widget for storage & grants
+    ├── 00_preflight.sh            # Regional accelerator quota verification
+    ├── 01_build_image.sh          # Container build & push to Artifact Registry
+    ├── 02_create_cluster.sh       # GKE Autopilot provisioning & Kueue setup
+    ├── 03_deploy_hub.sh           # JupyterHub deployment with Tartan GCS FUSE mounts
+    ├── 08_setup_iap.sh            # HTTPS Ingress & Google Identity-Aware Proxy setup
+    └── 99_teardown.sh             # Tear down cluster and release all cloud resources
 ```
 
-Ensure the grading service runs in the `cmu-idl` namespace and its `NetworkPolicy` allows ingress from the Hub pods.
+---
+
+## 2. Administrative Grant & Storage Management (`hub_admin.py`)
+
+Teaching assistants and maintainers manage student allocations directly via `scripts/hub_admin.py` or the `Makefile` shortcuts:
+
+### CLI Usage:
+```bash
+# 1. Discover all student PVCs and active storage capacities
+make admin-list
+# Or directly:
+python scripts/hub_admin.py list
+
+# 2. Award a project grant tier to a student
+# (Expands PVC online and applies vCPU/RAM overrides on next spawn)
+make admin-grant USER=student123 TIER=1
+# Or directly:
+python scripts/hub_admin.py grant student123 --tier 1
+
+# 3. Scaffold a structured shared project directory in Tartan storage
+make admin-project TEAM=capstone-alpha
+# Or directly:
+python scripts/hub_admin.py project capstone-alpha
+```
+
+### Interactive JupyterLab Widget:
+Maintainers running an Admin notebook can render the interactive point-and-click management widget:
+```python
+import hub_admin
+hub_admin.render_admin_widget()
+```
+This renders dropdowns to select any student, pick their grant tier (or custom storage/vCPU/RAM limits), and apply updates immediately without touching terminal commands.
+
+---
+
+## 3. Maintaining the Tartan Shared Environment (Zero Rebuilds)
+
+To add or update Python packages for the entire course **without rebuilding or redeploying the Docker image**:
+
+1. Log into the **Admin / Power User CPU Workstation** or an administrative pod with write access to `gs://cmu-idl-ocean`.
+2. Activate or target the shared environment directory:
+   ```bash
+   conda run -p /tartan/11785/envs/idl-shared-env pip install --upgrade <package_name>
+   ```
+3. Because `jupyterhub-values.yaml` injects:
+   ```yaml
+   JUPYTER_PATH: "/tartan/11785/share/jupyter:/ocean/share/jupyter:/opt/conda/share/jupyter"
+   PYTHONPATH: "/opt/course:/tartan/11785/envs/idl-shared-env/lib/python3.11/site-packages"
+   ```
+   All 300 student notebook pods discover the new package instantly upon import or kernel restart.
+
+---
+
+## 4. Modifying the Job Submission Client (`submit_tpu.py`)
+
+When modifying `submit_tpu.train()` or `submit_tpu.run()`:
+
+1. **Type Hints & Docstrings**: Maintain comprehensive type annotations and Google-style docstrings.
+2. **Billing & Accounting Labels**: Ensure every submitted Job carries the standard CMU billing labels:
+   ```python
+   metadata.labels = {
+       "cmu-course": "11-785",
+       "cmu-student": student,
+       "cmu-assignment": assignment_clean,
+       "cmu-grant-tier": grant_tier,
+       "kueue.x-k8s.io/queue-name": queue,
+   }
+   ```
+   These labels enable automated cost auditing and student capstone budget tracking in BigQuery.
+3. **Security Constraints**: **Never** add privileged flags (`privileged: true`, `NET_ADMIN`) or root user contexts. Autopilot admission controllers will reject the submission immediately.
+
+---
+
+## 5. Spawner Profile Management & Group Filtering
+
+JupyterHub spawner profiles are defined in `k8s/jupyterhub-values.yaml`:
+
+- **Visibility Filtering (`filter_profile_list`)**: Exposes profiles conditionally:
+  - Profiles without `allowed_groups` are visible to all students.
+  - Profiles with `allowed_groups` (e.g., `project-grant-tier1`, `tpu-access`) are only shown to users in those groups or admins.
+- **Adding Students to Groups**:
+  In JupyterHub, instructors can assign groups via the Admin panel (`/hub/admin`) or configure group membership through Google Workspace / IAM directory sync.
+
+---
+
+## 6. Upgrading the JupyterHub Helm Chart
+
+To upgrade the underlying JupyterHub version:
+1. Update `CHART_VERSION` in `scripts/03_deploy_hub.sh`.
+2. Test the upgrade with `--dry-run --debug` first.
+3. Review chart release notes for breaking changes in `singleuser.networkPolicy` and `hub.config`.
+4. Apply using `make hub`.

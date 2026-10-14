@@ -47,9 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added Section 12 on Long Training Runs, real HW2P2 benchmarks, and 3 critical operational caveats to [`README.md`](README.md).
   - Added beginner-friendly [`docs/student_guide.md`](docs/student_guide.md) explaining CPU notebook vs TPU pod, credential setup, and Gradescope submission.
   - Added [`SECURITY.md`](SECURITY.md) covering student privacy, Workload Identity, sandboxing, and vulnerability reporting.
-- **Infrastructure Automation**:
+- **Infrastructure Automation & Admin Tooling**:
   - Added [`scripts/12_create_secrets.sh`](scripts/12_create_secrets.sh) sourcing `common.sh` and targeting namespace `cmu-idl` for optional course baseline secrets.
-  - Added `make secrets` target to [`Makefile`](Makefile).
+  - Added `make secrets`, `make admin-list`, `make admin-grant`, and `make admin-project` targets to [`Makefile`](Makefile).
+  - Synchronized all documentation across [`docs/architecture.md`](docs/architecture.md), [`docs/developer_guide.md`](docs/developer_guide.md), [`docs/cost_management.md`](docs/cost_management.md), [`docs/getting_started.md`](docs/getting_started.md), and [`docs/troubleshooting.md`](docs/troubleshooting.md) with Tartan 3-Tier Storage and Capstone Grant models.
+  - Updated [`notebooks/F26_HW2P2_JAX_TPU_Hub.ipynb`](notebooks/F26_HW2P2_JAX_TPU_Hub.ipynb) to prioritize local Tartan mount discovery (`/tartan/11785/datasets/hw2p2`) before falling back to in-region GCS sync.
 
 ### Changed
 - Standardized default ServiceAccount in `submit_tpu.train()` to `student` with parameter override (`service_account_name`) and `TPU_SERVICE_ACCOUNT` environment fallback.
