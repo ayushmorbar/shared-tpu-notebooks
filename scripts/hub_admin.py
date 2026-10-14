@@ -204,6 +204,83 @@ def set_user_compute(
         return False
 
 
+GRANT_TIERS: dict[int, dict[str, Any]] = {
+    0: {
+        "name": "Tier 0: Course Default Baseline",
+        "storage": "32Gi",
+        "cpu_limit": 2,
+        "mem_limit": "16G",
+        "description": "Standard coursework profile for homework EDA and queued training.",
+    },
+    1: {
+        "name": "Tier 1: Capstone / Project Team Grant",
+        "storage": "100Gi",
+        "cpu_limit": 4,
+        "mem_limit": "32G",
+        "description": "Approved capstone teams: expanded PVC disk, high-compute CPU, and cohort queue priority.",
+    },
+    2: {
+        "name": "Tier 2: Research Fellow / Competitive Grant",
+        "storage": "200Gi",
+        "cpu_limit": 8,
+        "mem_limit": "64G",
+        "description": "Faculty-approved fellows: high-capacity storage, extreme CPU, and pinned/priority TPU access.",
+    },
+}
+
+
+def grant_tier(username: str, tier: int = 1, namespace: str | None = None) -> bool:
+    """Award a standardized compute and storage grant tier to a student.
+
+    Args:
+        username (str): Student username (e.g. 'amorbar' or 'student123').
+        tier (int): Grant tier level (0: default baseline, 1: capstone grant, 2: research fellow).
+        namespace (str, optional): Target Kubernetes namespace.
+
+    Returns:
+        bool: True if both storage expansion and compute override updates succeeded.
+    """
+    if tier not in GRANT_TIERS:
+        raise ValueError(f"Unknown grant tier {tier}. Supported tiers: {list(GRANT_TIERS.keys())}")
+
+    config_tier = GRANT_TIERS[tier]
+    print(f"Applying {config_tier['name']} for student '{username}'...")
+    print(f"  Storage: {config_tier['storage']} | vCPU: {config_tier['cpu_limit']} | RAM: {config_tier['mem_limit']}")
+    s_ok = expand_student_storage(username, config_tier["storage"], namespace=namespace)
+    c_ok = set_user_compute(username, cpu_limit=config_tier["cpu_limit"], mem_limit=config_tier["mem_limit"], namespace=namespace)
+    if s_ok and c_ok:
+        print(f"✓ Grant Tier {tier} successfully active for '{username}'. (Effective on next spawner launch)")
+        return True
+    return False
+
+
+def create_project_directory(team_id: str, base_path: str = "/tartan/11785/projects") -> str:
+    """Create a structured shared project directory for a capstone or research team.
+
+    Args:
+        team_id (str): Unique team identifier (e.g. 'capstone-alpha').
+        base_path (str): Base filesystem path for course projects. Defaults to /tartan/11785/projects.
+
+    Returns:
+        str: Absolute path to the created project directory.
+    """
+    clean_team = team_id.replace(" ", "_").lower()
+    project_dir = os.path.join(base_path, clean_team)
+    subdirs = ["checkpoints", "data", "code", "submissions"]
+    try:
+        os.makedirs(project_dir, exist_ok=True)
+        for s in subdirs:
+            os.makedirs(os.path.join(project_dir, s), exist_ok=True)
+        print(f"✓ Project directory created at: {project_dir}")
+        for s in subdirs:
+            print(f"  ├── {s}/")
+        return project_dir
+    except OSError as e:
+        print(f"Notice: Could not write directly to {base_path} ({e}).")
+        print("Ensure you are running from the Admin Workstation with Read-Write mount to /tartan/11785.")
+        return project_dir
+
+
 def render_admin_widget():
     """Render an interactive JupyterLab widget for point-and-click resource management.
 
@@ -229,29 +306,54 @@ def render_admin_widget():
         description="User:",
         disabled=False,
     )
+    tier_dropdown = widgets.Dropdown(
+        options=[
+            ("Custom Selection", -1),
+            ("Tier 0: Default Baseline (32Gi / 2 vCPU / 16G RAM)", 0),
+            ("Tier 1: Capstone Team Grant (100Gi / 4 vCPU / 32G RAM)", 1),
+            ("Tier 2: Research Fellow Grant (200Gi / 8 vCPU / 64G RAM)", 2),
+        ],
+        value=1,
+        description="Grant Tier:",
+        disabled=False,
+    )
     size_input = widgets.Dropdown(
         options=["32Gi", "48Gi", "64Gi", "80Gi", "100Gi", "128Gi", "200Gi"],
-        value="64Gi",
+        value="100Gi",
         description="Disk Size:",
         disabled=False,
     )
     cpu_input = widgets.Dropdown(
-        options=[("2 vCPU (Default)", 2), ("4 vCPU", 4), ("8 vCPU (High)", 8), ("16 vCPU (Workstation)", 16)],
-        value=2,
+        options=[("2 vCPU (Default)", 2), ("4 vCPU (Tier 1)", 4), ("8 vCPU (Tier 2)", 8), ("16 vCPU (Workstation)", 16)],
+        value=4,
         description="vCPU Limit:",
         disabled=False,
     )
     ram_input = widgets.Dropdown(
-        options=["16G (Default)", "32G (High)", "64G (Workstation)"],
-        value="16G (Default)",
+        options=["16G (Default)", "32G (Tier 1)", "64G (Tier 2)"],
+        value="32G (Tier 1)",
         description="RAM Limit:",
         disabled=False,
     )
+
+    def on_tier_change(change):
+        selected_tier = change["new"]
+        if selected_tier in GRANT_TIERS:
+            cfg = GRANT_TIERS[selected_tier]
+            size_input.value = cfg["storage"]
+            cpu_input.value = cfg["cpu_limit"]
+            for opt in ram_input.options:
+                if cfg["mem_limit"] in opt:
+                    ram_input.value = opt
+                    break
+
+    tier_dropdown.observe(on_tier_change, names="value")
+
     apply_btn = widgets.Button(
-        description="Apply Resources",
+        description="Award Grant / Apply Resources",
         button_style="danger",
         tooltip="Click to expand disk quota and set compute overrides",
-        icon="sliders",
+        icon="graduation-cap",
     )
     output = widgets.Output()
 
@@ -259,19 +361,25 @@ def render_admin_widget():
         with output:
             output.clear_output()
             selected_user = user_dropdown.value
-            target_size = size_input.value
-            target_cpu = cpu_input.value
-            target_ram = ram_input.value.split()[0]
-            print(f"Applying resource allocations for '{selected_user}'...")
-            expand_student_storage(selected_user, target_size)
-            set_user_compute(selected_user, cpu_limit=target_cpu, mem_limit=target_ram)
+            selected_tier = tier_dropdown.value
+            if selected_tier in GRANT_TIERS:
+                print(f"Applying Grant Tier {selected_tier} for '{selected_user}'...")
+                grant_tier(selected_user, tier=selected_tier)
+            else:
+                target_size = size_input.value
+                target_cpu = cpu_input.value
+                target_ram = ram_input.value.split()[0]
+                print(f"Applying custom resource allocations for '{selected_user}'...")
+                expand_student_storage(selected_user, target_size)
+                set_user_compute(selected_user, cpu_limit=target_cpu, mem_limit=target_ram)
             print("✓ Changes saved! Active immediately on the student's next notebook spawn.")
 
     apply_btn.on_click(on_button_clicked)
 
     form = widgets.VBox([
-        widgets.HTML("<h3>🎓 CMU 11-785 JupyterHub Resource Manager</h3><p>Manage and scale student disk quotas, vCPUs, and RAM dynamically without running CLI commands.</p>"),
+        widgets.HTML("<h3>🎓 CMU 11-785 JupyterHub Grant & Resource Manager</h3><p>Award student capstone project grants or tune PVC storage, vCPUs, and RAM dynamically.</p>"),
         user_dropdown,
+        tier_dropdown,
         size_input,
         cpu_input,
         ram_input,
@@ -283,7 +391,7 @@ def render_admin_widget():
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="CMU 11-785 JupyterHub Storage Admin CLI")
+    parser = argparse.ArgumentParser(description="CMU 11-785 JupyterHub Storage Admin & Grant CLI")
     subparsers = parser.add_subparsers(dest="command")
 
     # List command
@@ -296,6 +404,17 @@ if __name__ == "__main__":
     expand_p.add_argument("size", help="New storage size (e.g. 64Gi, 100Gi)")
     expand_p.add_argument("--namespace", default=None, help="Kubernetes namespace")
 
+    # Grant command
+    grant_p = subparsers.add_parser("grant", help="Award a project grant tier to a student")
+    grant_p.add_argument("username", help="Student username")
+    grant_p.add_argument("--tier", type=int, default=1, choices=[0, 1, 2], help="Grant tier (0: baseline, 1: capstone team, 2: fellow)")
+    grant_p.add_argument("--namespace", default=None, help="Kubernetes namespace")
+
+    # Project dir command
+    proj_p = subparsers.add_parser("project", help="Create a shared project directory for a capstone team")
+    proj_p.add_argument("team_id", help="Capstone team identifier (e.g. capstone-alpha)")
+    proj_p.add_argument("--base-path", default="/tartan/11785/projects", help="Base path for course projects")
+
     args = parser.parse_args()
     if args.command == "list":
         rows = list_student_storage(args.namespace)
@@ -305,5 +424,9 @@ if __name__ == "__main__":
             print(f"{r['username']:<20} {r['pvc_name']:<30} {r['requested_storage']:<10} {r['actual_storage']:<10} {r['phase']:<10}")
     elif args.command == "expand":
         expand_student_storage(args.username, args.size, args.namespace)
+    elif args.command == "grant":
+        grant_tier(args.username, tier=args.tier, namespace=args.namespace)
+    elif args.command == "project":
+        create_project_directory(args.team_id, base_path=args.base_path)
     else:
         parser.print_help()

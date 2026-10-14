@@ -197,6 +197,8 @@ def train(
     image: str | None = None,
     timeout: int = 28800,
     extra_env: dict[str, str] | None = None,
+    grant_tier: str | None = None,
+    queue: str | None = None,
     download_submission: bool = True,
     local_submission_path: str | None = None,
     sync_checkpoints: bool = True,
@@ -214,8 +216,8 @@ def train(
         script (str): Path to the Python training script on the notebook disk.
         assignment (str, optional): Homework identifier (e.g. "hw2p2", "hw1p2", "hw3").
             If None, auto-inferred from script filename or os.environ["ASSIGNMENT"].
-        data_uri (str, optional): GCS URI of the pre-processed dataset/cache.
-            Defaults to os.environ["DATA_URI"] or assignment-scoped bucket URI.
+        data_uri (str, optional): Dataset URI. Auto-resolves /tartan/11785/datasets/{assignment},
+            /ocean/datasets/{assignment}, or GCS bucket if not specified.
         ckpt_uri (str, optional): GCS base URI for Orbax model checkpoints.
             Defaults to f"{os.environ['CKPT_ROOT']}/{assignment}/{student}".
         submission_uri (str, optional): GCS URI where submission.csv will be saved.
@@ -231,6 +233,9 @@ def train(
         timeout (int, optional): Maximum timeout in seconds (default: 28800 = 8 hours).
         extra_env (dict[str, str], optional): Custom environment variables / secrets
             (e.g., HF_TOKEN, custom hyperparameters) forwarded directly to the pod.
+        grant_tier (str, optional): Student project grant tier for Kueue budget tracking
+            (e.g., "tier0-coursework", "tier1-capstone", "tier2-fellow").
+        queue (str, optional): Specific Kueue LocalQueue to submit to. Defaults to "tpu".
         download_submission (bool, optional): Automatically download submission.csv
             from GCS to local_submission_path upon successful job completion. Defaults to True.
         local_submission_path (str, optional): Local destination for submission.csv.
@@ -262,10 +267,13 @@ def train(
     assignment_clean = assignment.replace("_", "-").lower()
     name = f"tpu-{assignment_clean}-{student}"[:63]
 
-    # Resolve default storage URIs (Ocean-aware & assignment-aware)
+    # Resolve default storage URIs (Tartan-aware, Ocean-aware & assignment-aware)
+    tartan_local_dir = f"/tartan/11785/datasets/{assignment_clean}"
     ocean_local_dir = f"/ocean/datasets/{assignment_clean}"
     if not data_uri:
-        if os.path.exists(ocean_local_dir):
+        if os.path.exists(tartan_local_dir):
+            data_uri = tartan_local_dir
+        elif os.path.exists(ocean_local_dir):
             data_uri = ocean_local_dir
         elif assignment_clean == "hw2p2":
             data_uri = os.environ.get("DATA_URI", "gs://hw2p2-cached-data/img_cache")
@@ -400,11 +408,20 @@ def train(
     # Clean up previous instance of this student's training job
     _delete(batch, name, ns)
 
+    effective_queue = queue or os.environ.get("KUEUE_LOCAL_QUEUE", QUEUE)
+    job_labels = {
+        "kueue.x-k8s.io/queue-name": effective_queue,
+        "cmu-course": "11-785",
+        "cmu-student": student,
+        "cmu-assignment": assignment_clean,
+        "cmu-grant-tier": (grant_tier or os.environ.get("GRANT_TIER", "tier0-coursework")).lower(),
+    }
+
     job = client.V1Job(
         metadata=client.V1ObjectMeta(
             name=name,
             namespace=ns,
-            labels={"kueue.x-k8s.io/queue-name": QUEUE},
+            labels=job_labels,
         ),
         spec=client.V1JobSpec(
             suspend=True,
@@ -788,11 +805,13 @@ class TPUJob:
         image: str | None = None,
         service_account_name: str | None = None,
         queue: str | None = None,
+        grant_tier: str | None = None,
     ):
         self.assignment = assignment
         self.image = image
         self.service_account_name = service_account_name
         self.queue = queue or QUEUE
+        self.grant_tier = grant_tier
 
     def train(
         self,
@@ -801,6 +820,8 @@ class TPUJob:
         epochs: int = 2,
         steps_per_epoch: int = 0,
         batch_size: int = 128,
+        grant_tier: str | None = None,
+        queue: str | None = None,
         **kwargs,
     ) -> str:
         """Submit a standalone training script and optional helper modules."""
@@ -813,6 +834,8 @@ class TPUJob:
             batch_size=batch_size,
             image=self.image,
             service_account_name=self.service_account_name,
+            grant_tier=grant_tier or self.grant_tier,
+            queue=queue or self.queue,
             **kwargs,
         )
 

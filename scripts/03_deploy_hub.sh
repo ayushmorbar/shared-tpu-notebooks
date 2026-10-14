@@ -78,7 +78,9 @@ echo "==> API server endpoint ${APISERVER} (not the ClusterIP -- see the values 
 
 VALUES=$(mktemp)
 trap 'rm -f "${VALUES}"' EXIT
-sed "s|__APISERVER_ENDPOINT__|${APISERVER}|" \
+sed -e "s|__APISERVER_ENDPOINT__|${APISERVER}|g" \
+    -e "s|__OCEAN_BUCKET__|${OCEAN_BUCKET}|g" \
+    -e "s|__PROJECT__|${PROJECT}|g" \
   "$(dirname "$0")/../k8s/jupyterhub-values.yaml" > "${VALUES}"
 
 IMAGE_NAME="${REGION}-docker.pkg.dev/${PROJECT}/course-images/scipy-notebook"

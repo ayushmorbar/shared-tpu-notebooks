@@ -51,6 +51,7 @@ TEST_ACCOUNTS="${TEST_ACCOUNTS:-}"
 
 OCEAN_BUCKET="${OCEAN_BUCKET:-cmu-idl-ocean}"
 OCEAN_URI="${OCEAN_URI:-gs://${OCEAN_BUCKET}}"
+TARTAN_MOUNT_PATH="${TARTAN_MOUNT_PATH:-/tartan/11785}"
 
 DATA_URI="${DATA_URI:-gs://hw2p2-cached-data/img_cache}"
 CKPT_ROOT="${CKPT_ROOT:-gs://hw2p2-cached-data/checkpoints}"
