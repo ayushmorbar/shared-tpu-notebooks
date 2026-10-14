@@ -199,9 +199,10 @@ hub:
               return await res if inspect.isawaitable(res) else res
 
           user_groups = [g.name if hasattr(g, 'name') else str(g) for g in getattr(user, 'groups', [])]
+          auth_admins = set(getattr(getattr(getattr(spawner, 'hub', None), 'authenticator', None), 'admin_users', []))
           is_admin = (
               getattr(user, 'admin', False) or
-              user.name in ['amorbar', 'instructor', 'bwarren2'] or
+              user.name in auth_admins or
               any(g in ['staff', 'admin'] for g in user_groups)
           )
 
