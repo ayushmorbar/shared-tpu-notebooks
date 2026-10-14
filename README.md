@@ -259,9 +259,11 @@ Conducted in `us-west4` with 4 lab sections sharing a single Kueue cohort:
 
 | Profile Name | Resource Allocation | Intended Audience |
 | :--- | :--- | :--- |
-| **Course default — CPU notebook** | 2 vCPU, 16 GiB RAM, 32 GiB home disk (Spot VM, gVisor) | All Students (interactive coding & TPU submission) |
-| **Large CPU notebook** | 8 vCPU, 32 GiB RAM (Spot VM, gVisor) | Students (dataset preprocessing, tokenization) |
-| **Pinned TPU v5e notebook** | 1 v5e chip attached directly ($1.35/hr) | Staff Only (`allowed_groups: [staff]`) |
+| **Course default — CPU notebook** | 2 vCPU, 16 GiB RAM, 32 GiB home disk (Spot VM, gVisor) | All Enrolled Students (interactive coding, EDA & TPU job submission) |
+| **Tier 1: Capstone / Course Project Grant** | 4 vCPU, 32 GiB RAM, 100 GiB scratch (Spot VM) | Approved Capstone Teams (`allowed_groups: [project-grant-tier1]`) |
+| **Admin / Power User CPU Workstation** | 16 vCPU, 64 GiB RAM, 100 GiB scratch | Maintainer & Staff Only (`allowed_groups: [staff, admin]`) |
+| **Pinned TPU v5e-1 notebook** | 1 v5e chip attached directly ($1.35/hr) | Staff & Research Fellows (`allowed_groups: [tpu-access, staff, admin]`) |
+| **Pinned TPU v5e-4 Podslice** | 4 v5e chips mesh (2x2 topology, $5.40/hr) | Staff & Admin Only (`allowed_groups: [tpu-access, staff, admin]`) |
 
 ---
 
@@ -372,8 +374,10 @@ shared-tpu-notebooks/
 ├── docs/                        # Architectural runbooks & developer guides
 │   ├── architecture.md          # Multi-layer platform architecture specification
 │   ├── cost_management.md       # Financial modeling, Spot pricing, & billing formulas
+│   ├── deep_dive_psc_bridges_vs_berkeley_datahub.md # Architectural teardown: PSC vs Berkeley vs TPU Hub
 │   ├── developer_guide.md       # Engineering standards, bash style guide, & testing
 │   ├── getting_started.md       # Administrator setup walkthrough
+│   ├── shared_storage_and_environments.md # Tartan 3-Tier Storage Hierarchy & live shared envs
 │   ├── student_guide.md         # Student guide: credentials, training, & Gradescope
 │   └── troubleshooting.md       # Runbooks for quota, Kueue, IAP, and OOM issues
 ├── docker/
@@ -407,7 +411,8 @@ shared-tpu-notebooks/
     ├── 10_cleanup_pvcs.sh       # End-of-term PVC and retained persistent disk cleanup
     ├── 11_expand_pvcs.sh        # Student persistent volume expansion to 32Gi
     ├── 12_create_secrets.sh     # Optional course credentials Kubernetes Secret creator
-    └── 99_teardown.sh           # Full infrastructure teardown with zero-cost verification
+    ├── 99_teardown.sh           # Full infrastructure teardown with zero-cost verification
+    └── hub_admin.py             # JupyterHub Admin CLI & ipywidgets GUI for PVCs & Capstone Grants
 ```
 
 ---

@@ -26,8 +26,10 @@ To keep the classroom affordable and fast for hundreds of students, we separate 
                      back to your private /home/jovyan/ directory!
 ```
 
-1. **Your Notebook Pod (`/home/jovyan`)**: You have a 32 GiB private persistent disk that stays with you all semester. Your code, virtual environments, personal keys, and downloaded checkpoints live here.
-2. **The Cloud TPU Pod**: When you call `submit_tpu.train("hw2p2_train.py", ...)`, your script is submitted to a fair-share queue managed by **Kueue**. As soon as a Cloud TPU v5e chip is available, your pod runs, streams its logs directly to your notebook output, and shuts down immediately when finished so other students can train.
+1. **Your Notebook Pod (`/home/jovyan`)**: You have a 32 GiB private persistent disk that stays with you all semester. Your code, personal keys (`.env`), and evaluated checkpoints live here.
+2. **Central Tartan Course Store (`/tartan/11785/` and `/ocean/`)**: Read-only shared storage hosting course datasets (`/tartan/11785/datasets/`), starter notebooks (`/tartan/11785/assignments/`), and the shared live Python environment.
+3. **Live Shared Environment**: Select the **`Python 3.11 (CMU 11-785 TPU Shared Env)`** kernel from the top-right kernel dropdown. All required packages (`flax`, `jax`, `torch`, `augmax`, `timm`, `orbax`) are pre-installed and updated live by course staff.
+4. **The Cloud TPU Pod**: When you call `submit_tpu.train("hw2p2_train.py", ...)`, your script is submitted to a fair-share queue managed by **Kueue**. As soon as a Cloud TPU v5e chip is available, your pod runs, streams its logs directly to your notebook output, and shuts down immediately when finished so other students can train.
 
 ---
 

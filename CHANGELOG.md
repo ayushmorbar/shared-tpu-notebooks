@@ -7,9 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased] - 2026-10-12
+## [Unreleased] - 2026-10-15
 
 ### Added
+- **Tartan 3-Tier Storage Hierarchy (`/tartan/11785/`)**:
+  - Central course storage mounted at `/tartan/11785/` with high-throughput NVMe local disk caching (`file-cache:max-size-mb:50000`).
+  - Full backward-compatibility dual mount to `/ocean` in `k8s/jupyterhub-values.yaml`.
+  - Live shared environment (`/tartan/11785/envs/idl-shared-env`) discovered via `JUPYTER_PATH`, eliminating 30-minute Docker container rebuilds.
+- **Student Project Grant Infrastructure & Gated Pinned TPU**:
+  - Added `Tier 1: Capstone / Course Project Grant (High-Compute CPU)` spawner profile (4 vCPU, 32 GiB RAM, 100 GiB scratch).
+  - Pinned interactive Cloud TPU v5e pod profiles strictly role-gated to groups `tpu-access`, `staff`, `admin`.
+  - Granular group profile visibility filter (`filter_profile_list`) in `k8s/jupyterhub-values.yaml`.
+  - Added `GRANT_TIERS` presets (Tier 0: 32Gi/2vCPU, Tier 1: 100Gi/4vCPU, Tier 2: 200Gi/8vCPU) in `scripts/hub_admin.py`.
+  - Added `grant_tier()` and `create_project_directory()` functions with CLI and interactive JupyterLab ipywidgets GUI.
+- **Kueue Grant Accounting & Billing Labels**:
+  - Injected structured metadata labels (`cmu-course: "11-785"`, `cmu-grant-tier`, `cmu-student`, `cmu-assignment`) into every batch Job in `notebooks/submit_tpu.py` for real-time BigQuery spend tracking.
+  - Added `grant_tier` and `queue` parameters to `submit_tpu.train()` and `TPUJob`.
+- **Architectural Research & Grant Roadmap**:
+  - Added [`docs/deep_dive_psc_bridges_vs_berkeley_datahub.md`](docs/deep_dive_psc_bridges_vs_berkeley_datahub.md) comparing PSC Bridges-2/3, UC Berkeley DataHub, and the CMU 11-785 Tartan Hub with October 2026 financial models ($21,178 for 300 students, 87% savings).
+  - Added [`docs/shared_storage_and_environments.md`](docs/shared_storage_and_environments.md) covering Tartan storage topology, shared virtual environments, and grant administration.
 - **Dedicated Training Path (`submit_tpu.train`)**:
   - Standalone training script mounting via Kubernetes ConfigMap (`{name}-src` -> `/src/entrypoint.py`).
   - Fast local NVMe scratch disk attachment (`emptyDir` on `/tmp`) for high-throughput dataset caching.
