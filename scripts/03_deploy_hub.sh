@@ -73,8 +73,9 @@ if [[ -n "${GSA_EMAIL}" ]]; then
     --role="roles/iam.workloadIdentityUser" \
     --member="serviceAccount:${PROJECT}.svc.id.goog[${NAMESPACE}/student]" >/dev/null 2>&1 || true
 
-  if [[ -n "${OCEAN_BUCKET:-}" ]]; then
-    gcloud storage buckets add-iam-policy-binding "gs://${OCEAN_BUCKET}" \
+  TARGET_BUCKET="${TARTAN_BUCKET:-${OCEAN_BUCKET:-cmu-idl-ocean}}"
+  if [[ -n "${TARGET_BUCKET}" ]]; then
+    gcloud storage buckets add-iam-policy-binding "gs://${TARGET_BUCKET}" \
       --member="serviceAccount:${PROJECT}.svc.id.goog[${NAMESPACE}/student]" \
       --role="roles/storage.admin" >/dev/null 2>&1 || true
   fi
@@ -101,12 +102,13 @@ echo "==> API server endpoint ${APISERVER} (not the ClusterIP -- see the values 
 VALUES=$(mktemp)
 trap 'rm -f "${VALUES}"' EXIT
 sed -e "s|__APISERVER_ENDPOINT__|${APISERVER}|g" \
-    -e "s|__OCEAN_BUCKET__|${OCEAN_BUCKET}|g" \
+    -e "s|__TARTAN_BUCKET__|${TARGET_BUCKET}|g" \
+    -e "s|__OCEAN_BUCKET__|${TARGET_BUCKET}|g" \
     -e "s|__PROJECT__|${PROJECT}|g" \
   "$(dirname "$0")/../k8s/jupyterhub-values.yaml" > "${VALUES}"
 
-IMAGE_NAME="${REGION}-docker.pkg.dev/${PROJECT}/course-images/scipy-notebook"
-IMAGE_TAG="latest"
+IMAGE_NAME="${SINGLEUSER_IMAGE:-quay.io/jupyter/scipy-notebook}"
+IMAGE_TAG="${SINGLEUSER_IMAGE_TAG:-2024-11-11}"
 
 ADMIN_USERS="${ADMIN_USERS:-instructor}"
 ADMIN_LIST=()
@@ -125,6 +127,7 @@ helm upgrade --install "${RELEASE}" jupyterhub/jupyterhub \
   --set singleuser.image.name="${IMAGE_NAME}" \
   --set singleuser.image.tag="${IMAGE_TAG}" \
   --set "hub.config.Authenticator.admin_users={${ADMIN_STR}}" \
+  --set-file "singleuser.extraFiles.platform_config\.py.stringData=$(dirname "$0")/../notebooks/platform_config.py" \
   --set-file "singleuser.extraFiles.submit_tpu\.py.stringData=$(dirname "$0")/../notebooks/submit_tpu.py" \
   --set-file "singleuser.extraFiles.hw0_tpu_hello\.ipynb.stringData=$(dirname "$0")/../notebooks/hw0_tpu_hello.ipynb" \
   --set-file "singleuser.extraFiles.tpu_platform_guide\.ipynb.stringData=$(dirname "$0")/../notebooks/00_tpu_platform_guide.ipynb" \

@@ -353,7 +353,7 @@ Tested on 431,550 face images at 112×112 resolution pre-processed into `.npy` c
    `roles/storage.objectAdmin` is not sufficient for Orbax. Its GCS backend calls `storage.buckets.get`, which causes `CheckpointManager` construction to fail with HTTP 403 Forbidden. You must bind `roles/storage.legacyBucketReader` on the cache bucket:
    ```bash
    PROJECT_NUM=$(gcloud projects describe ${PROJECT} --format="value(projectNumber)")
-   gcloud storage buckets add-iam-policy-binding gs://hw2p2-cached-data \
+   gcloud storage buckets add-iam-policy-binding gs://cmu-idl-ocean \
      --member="serviceAccount:${PROJECT_NUM}-compute@developer.gserviceaccount.com" \
      --role="roles/storage.legacyBucketReader"
    ```

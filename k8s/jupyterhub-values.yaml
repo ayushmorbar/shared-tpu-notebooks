@@ -414,7 +414,7 @@ singleuser:
         csi:
           driver: gcsfuse.csi.storage.gke.io
           volumeAttributes:
-            bucketName: __OCEAN_BUCKET__
+            bucketName: __TARTAN_BUCKET__
             mountOptions: "implicit-dirs,file-cache:max-size-mb:50000,metadata-cache:stat-cache-max-size-mb:2048,metadata-cache:ttl-secs:86400,ro"
     extraVolumeMounts:
       - name: course-tartan
@@ -446,6 +446,9 @@ singleuser:
   # 03_deploy_hub.sh fills stringData from notebooks/submit_tpu.py with helm
   # --set-file, so the helper stays one real file instead of a copy pasted into YAML.
   extraFiles:
+    platform_config.py:
+      mountPath: /opt/course/platform_config.py
+      stringData: "placeholder, replaced at deploy time"
     submit_tpu.py:
       mountPath: /opt/course/submit_tpu.py
       stringData: "placeholder, replaced at deploy time"
@@ -466,8 +469,8 @@ singleuser:
   startTimeout: 600  # Extend from default 300s to 600s for dynamic GKE Autopilot node scale-up and CSI disk attachment
   defaultUrl: "/lab"
   image:
-    name: us-docker.pkg.dev/__PROJECT__/cmu-idl/jupyter-course-image
-    tag: "latest"
+    name: quay.io/jupyter/scipy-notebook
+    tag: "2024-11-11"
 
   profileList:
     - display_name: "Course default (CPU notebook)"
@@ -517,6 +520,13 @@ singleuser:
         mem_guarantee: "32G"
         node_selector:
           cloud.google.com/gke-spot: "false"
+        extra_volumes:
+          - name: course-tartan
+            csi:
+              driver: gcsfuse.csi.storage.gke.io
+              volumeAttributes:
+                bucketName: __TARTAN_BUCKET__
+                mountOptions: "implicit-dirs,file-cache:max-size-mb:50000,metadata-cache:stat-cache-max-size-mb:2048,metadata-cache:ttl-secs:60"
 
     - display_name: "Pinned TPU v5e-1 notebook (staff & capstone grants)"
       description: >-

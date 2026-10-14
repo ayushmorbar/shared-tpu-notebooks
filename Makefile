@@ -22,10 +22,14 @@ TEST_ACCOUNTS ?= # e.g. user:test1@cmu.edu user:devansh@cmu.edu
 TPU_ACCELERATOR ?= tpu-v5-lite-podslice
 TPU_TOPOLOGY    ?= 1x1
 TPU_IMAGE       ?= us-docker.pkg.dev/cloud-tpu-images/jax-ai-image/tpu:latest
+SINGLEUSER_IMAGE     ?= quay.io/jupyter/scipy-notebook
+SINGLEUSER_IMAGE_TAG ?= 2024-11-11
+TARTAN_BUCKET        ?= cmu-idl-ocean
+OCEAN_BUCKET         ?= $(TARTAN_BUCKET)
 
-export PROJECT REGION CLUSTER NS NAMESPACE=$(NS) STUDENTS POOL_CHIPS WARM DOMAIN STUDENT_GROUP TA_GROUP ADMIN_USERS TEST_ACCOUNTS TPU_ACCELERATOR TPU_TOPOLOGY TPU_IMAGE
+export PROJECT REGION CLUSTER NS NAMESPACE=$(NS) STUDENTS POOL_CHIPS WARM DOMAIN STUDENT_GROUP TA_GROUP ADMIN_USERS TEST_ACCOUNTS TPU_ACCELERATOR TPU_TOPOLOGY TPU_IMAGE SINGLEUSER_IMAGE SINGLEUSER_IMAGE_TAG TARTAN_BUCKET OCEAN_BUCKET
 
-.PHONY: check preflight cluster image hub iap ip domain dns-record warm-on warm-off demo smoke scale report expand-pvcs expand-pvcs-dry-run clean-pvcs clean-pvcs-dry-run secrets teardown venv admin-list admin-grant admin-project help
+.PHONY: check preflight cluster image hub shared-env iap ip domain dns-record warm-on warm-off demo smoke scale report expand-pvcs expand-pvcs-dry-run clean-pvcs clean-pvcs-dry-run secrets teardown venv admin-list admin-grant admin-project help
 
 # Ensure the PROJECT variable is set before proceeding.
 check:
@@ -37,9 +41,14 @@ endif
 preflight: check
 	bash scripts/00_preflight.sh
 
-# Build and push the custom Jupyter course image to Artifact Registry.
+# (Optional/Legacy) Build custom course image. Note: Platform now uses official upstream
+# quay.io/jupyter/scipy-notebook + zero-rebuild shared environments on /tartan/11785.
 image: check
 	bash scripts/01_build_image.sh
+
+# Provision or update the zero-rebuild shared Python environment on Tartan GCS store.
+shared-env: check
+	bash scripts/09_setup_shared_env.sh
 
 # Provision the GKE Autopilot cluster, Kueue configurations, and StorageClasses.
 cluster: check

@@ -38,8 +38,13 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-DATA_URI = os.environ.get("DATA_URI", "gs://hw2p2-cached-data/img_cache")
-CKPT_URI = os.environ.get("CKPT_URI", "gs://hw2p2-cached-data/checkpoints/anon")
+try:
+    import platform_config
+    DATA_URI = os.environ.get("DATA_URI") or platform_config.get_dataset_uri("hw2p2")
+    CKPT_URI = os.environ.get("CKPT_URI") or platform_config.get_checkpoint_uri("hw2p2", os.environ.get("STUDENT", "anon"))
+except ImportError:
+    DATA_URI = os.environ.get("DATA_URI", "gs://cmu-idl-ocean/datasets/hw2p2")
+    CKPT_URI = os.environ.get("CKPT_URI", "gs://cmu-idl-ocean/checkpoints/hw2p2/anon")
 STUDENT = os.environ.get("STUDENT", "anon")
 ENV_EPOCHS = os.environ.get("EPOCHS")
 STEPS_PER_EPOCH = int(os.environ.get("STEPS_PER_EPOCH", "0"))

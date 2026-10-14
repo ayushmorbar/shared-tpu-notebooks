@@ -267,31 +267,19 @@ def train(
     assignment_clean = assignment.replace("_", "-").lower()
     name = f"tpu-{assignment_clean}-{student}"[:63]
 
-    # Resolve default storage URIs (Tartan-aware, Ocean-aware & assignment-aware)
-    tartan_local_dir = f"/tartan/11785/datasets/{assignment_clean}"
-    ocean_local_dir = f"/ocean/datasets/{assignment_clean}"
-    if not data_uri:
-        if os.path.exists(tartan_local_dir):
-            data_uri = tartan_local_dir
-        elif os.path.exists(ocean_local_dir):
-            data_uri = ocean_local_dir
-        elif assignment_clean == "hw2p2":
-            data_uri = os.environ.get("DATA_URI", "gs://hw2p2-cached-data/img_cache")
-        else:
-            ocean_bucket = os.environ.get("OCEAN_BUCKET", "cmu-idl-ocean")
-            data_uri = os.environ.get("DATA_URI", f"gs://{ocean_bucket}/datasets/{assignment_clean}")
-
-    ckpt_root = os.environ.get(
-        "CKPT_ROOT",
-        "gs://hw2p2-cached-data/checkpoints" if assignment_clean == "hw2p2" else f"gs://cmu-idl-ocean/checkpoints/{assignment_clean}"
-    ).rstrip("/")
-    ckpt_uri = ckpt_uri or f"{ckpt_root}/{student}"
-
-    sub_root = os.environ.get(
-        "SUBMISSION_ROOT",
-        "gs://hw2p2-cached-data/submissions" if assignment_clean == "hw2p2" else f"gs://cmu-idl-ocean/submissions/{assignment_clean}"
-    ).rstrip("/")
-    submission_uri = submission_uri or f"{sub_root}/{student}/submission.csv"
+    # Resolve default storage URIs via central platform_config
+    try:
+        import platform_config
+        data_uri = data_uri or platform_config.get_dataset_uri(assignment_clean)
+        ckpt_uri = ckpt_uri or platform_config.get_checkpoint_uri(assignment_clean, student)
+        submission_uri = submission_uri or platform_config.get_submission_uri(assignment_clean, student)
+    except ImportError:
+        ocean_bucket = os.environ.get("OCEAN_BUCKET", "cmu-idl-ocean")
+        data_uri = data_uri or os.environ.get("DATA_URI", f"gs://{ocean_bucket}/datasets/{assignment_clean}")
+        ckpt_root = os.environ.get("CKPT_ROOT", f"gs://{ocean_bucket}/checkpoints/{assignment_clean}").rstrip("/")
+        ckpt_uri = ckpt_uri or f"{ckpt_root}/{student}"
+        sub_root = os.environ.get("SUBMISSION_ROOT", f"gs://{ocean_bucket}/submissions/{assignment_clean}").rstrip("/")
+        submission_uri = submission_uri or f"{sub_root}/{student}/submission.csv"
 
     # Resolve local download paths in student persistent home volume
     if local_submission_path is None:

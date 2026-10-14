@@ -37,7 +37,7 @@ Every student notebook pod and Cloud TPU execution pod enforces strict Kubernete
 ### 🔑 Workload Identity Federation (Keyless Google Cloud Access):
 - **No Static Service Account JSON Keys:** Neither notebook pods nor TPU pods store or download static GCP service account keys.
 - **Workload Identity:** Pods run as the Kubernetes ServiceAccount `student`, which binds to the Google Service Account via IAM Workload Identity Federation.
-- Access to Google Cloud Storage (`gs://hw2p2-cached-data/`) is granted via short-lived, automatically rotated OAuth2 tokens issued by the Kubernetes metadata server.
+- Access to Google Cloud Storage (`gs://cmu-idl-ocean/`) is granted via short-lived, automatically rotated OAuth2 tokens issued by the Kubernetes metadata server.
 
 ### 🌐 Perimeter Defense & Authentication:
 - **Cloud Identity-Aware Proxy (IAP):** JupyterHub is placed behind Google Cloud IAP with managed TLS certificates. Only authenticated users in the university Google Workspace domain (`@andrew.cmu.edu` or authorized roster group) can access the proxy.

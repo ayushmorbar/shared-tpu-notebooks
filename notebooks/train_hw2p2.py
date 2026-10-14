@@ -8,9 +8,9 @@ Proves four essential infrastructure capabilities for long-running jobs:
   4. Checkpoints stream to GCS via Orbax with modern preservation policy and resume on restart.
 
 Environment variables set by submit_tpu.train():
-  DATA_URI         gs://hw2p2-cached-data/img_cache
-  CKPT_URI         gs://hw2p2-cached-data/checkpoints/<student>
-  SUBMISSION_URI   gs://hw2p2-cached-data/submissions/<student>/submission.csv
+  DATA_URI         /tartan/11785/datasets/hw2p2 or gs://cmu-idl-ocean/datasets/hw2p2
+  CKPT_URI         gs://cmu-idl-ocean/checkpoints/hw2p2/<student>
+  SUBMISSION_URI   gs://cmu-idl-ocean/submissions/hw2p2/<student>/submission.csv
   STUDENT          student username
   EPOCHS           number of epochs (default: 2 for smoke test)
   STEPS_PER_EPOCH  0 means full epoch; small number (e.g. 10) makes a smoke run
@@ -31,8 +31,13 @@ import optax
 import orbax.checkpoint as ocp
 from flax import nnx
 
-DATA_URI = os.environ.get("DATA_URI", "gs://hw2p2-cached-data/img_cache")
-CKPT_URI = os.environ.get("CKPT_URI", "gs://hw2p2-cached-data/checkpoints/anon")
+try:
+    import platform_config
+    DATA_URI = os.environ.get("DATA_URI") or platform_config.get_dataset_uri("hw2p2")
+    CKPT_URI = os.environ.get("CKPT_URI") or platform_config.get_checkpoint_uri("hw2p2", os.environ.get("STUDENT", "anon"))
+except ImportError:
+    DATA_URI = os.environ.get("DATA_URI", "gs://cmu-idl-ocean/datasets/hw2p2")
+    CKPT_URI = os.environ.get("CKPT_URI", "gs://cmu-idl-ocean/checkpoints/hw2p2/anon")
 STUDENT = os.environ.get("STUDENT", "anon")
 EPOCHS = int(os.environ.get("EPOCHS", "2"))
 STEPS_PER_EPOCH = int(os.environ.get("STEPS_PER_EPOCH", "0"))

@@ -49,14 +49,23 @@ TA_GROUP="${TA_GROUP:-}"
 ADMIN_USERS="${ADMIN_USERS:-}"
 TEST_ACCOUNTS="${TEST_ACCOUNTS:-}"
 
-OCEAN_BUCKET="${OCEAN_BUCKET:-cmu-idl-ocean}"
-OCEAN_URI="${OCEAN_URI:-gs://${OCEAN_BUCKET}}"
+# Central Tartan course storage (legacy equivalent: cmu-idl-ocean / ocean)
+TARTAN_BUCKET="${TARTAN_BUCKET:-${OCEAN_BUCKET:-cmu-idl-ocean}}"
+TARTAN_URI="${TARTAN_URI:-gs://${TARTAN_BUCKET}}"
 TARTAN_MOUNT_PATH="${TARTAN_MOUNT_PATH:-/tartan/11785}"
 
-DATA_URI="${DATA_URI:-gs://hw2p2-cached-data/img_cache}"
-CKPT_ROOT="${CKPT_ROOT:-gs://hw2p2-cached-data/checkpoints}"
-SUBMISSION_ROOT="${SUBMISSION_ROOT:-gs://hw2p2-cached-data/submissions}"
+# Aliases for backward compatibility
+OCEAN_BUCKET="${TARTAN_BUCKET}"
+OCEAN_URI="${TARTAN_URI}"
+
+DATA_URI="${DATA_URI:-gs://${TARTAN_BUCKET}/datasets}"
+CKPT_ROOT="${CKPT_ROOT:-gs://${TARTAN_BUCKET}/checkpoints}"
+SUBMISSION_ROOT="${SUBMISSION_ROOT:-gs://${TARTAN_BUCKET}/submissions}"
 SECRET_NAME="${SECRET_NAME:-course-secrets}"
+
+SINGLEUSER_IMAGE="${SINGLEUSER_IMAGE:-quay.io/jupyter/scipy-notebook}"
+SINGLEUSER_IMAGE_TAG="${SINGLEUSER_IMAGE_TAG:-2024-11-11}"
+SHARED_ENV_DIR="${SHARED_ENV_DIR:-${TARTAN_MOUNT_PATH}/envs/idl-shared-env}"
 
 # GKE Cluster Context Identifier
 GKE_CTX="gke_${PROJECT}_${REGION}_${CLUSTER}"
