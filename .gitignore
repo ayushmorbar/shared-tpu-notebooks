@@ -20,3 +20,6 @@ results/
 # OS Metadata
 .DS_Store
 Thumbs.db
+
+# Mis
+.tmp/
