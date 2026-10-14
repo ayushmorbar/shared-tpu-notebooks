@@ -25,7 +25,7 @@ TPU_IMAGE       ?= us-docker.pkg.dev/cloud-tpu-images/jax-ai-image/tpu:latest
 
 export PROJECT REGION CLUSTER NS NAMESPACE=$(NS) STUDENTS POOL_CHIPS WARM DOMAIN STUDENT_GROUP TA_GROUP ADMIN_USERS TEST_ACCOUNTS TPU_ACCELERATOR TPU_TOPOLOGY TPU_IMAGE
 
-.PHONY: check preflight cluster image hub iap warm-on warm-off demo smoke scale report expand-pvcs expand-pvcs-dry-run clean-pvcs clean-pvcs-dry-run secrets teardown venv admin-list admin-grant admin-project help
+.PHONY: check preflight cluster image hub iap ip domain dns-record warm-on warm-off demo smoke scale report expand-pvcs expand-pvcs-dry-run clean-pvcs clean-pvcs-dry-run secrets teardown venv admin-list admin-grant admin-project help
 
 # Ensure the PROJECT variable is set before proceeding.
 check:
@@ -62,6 +62,50 @@ smoke: check
 # port-forwarding, which binds to a single proxy pod and dies when that pod moves.
 iap: check
 	bash scripts/08_setup_iap.sh
+
+# Display the reserved GCP Global Static IP and active ingress mapping
+ip: check
+	@IP=$$(gcloud compute addresses describe tpu-notebooks-ip --global --project=$(PROJECT) --format="value(address)" 2>/dev/null || echo ""); \
+	if [ -z "$$IP" ]; then \
+	  echo "Static IP 'tpu-notebooks-ip' is not yet reserved. Run 'make iap' to provision."; \
+	else \
+	  echo "=================================================="; \
+	  echo "GCP Global Static IP : $$IP"; \
+	  echo "Default nip.io URL   : https://$$IP.nip.io"; \
+	  if [ -n "$(DOMAIN)" ]; then \
+	    echo "Custom Subdomain     : https://$(DOMAIN)"; \
+	    echo "DNS Configuration    : Create A-Record: $(DOMAIN) -> $$IP"; \
+	  fi; \
+	  echo "=================================================="; \
+	fi
+
+# Reconfigure Ingress and ManagedCertificate with a custom university subdomain
+domain: check
+ifndef DOMAIN
+	$(error DOMAIN is not set. Usage: make domain DOMAIN=jupyter.cs.cmu.edu)
+endif
+	@echo "==> Configuring custom domain: $(DOMAIN)..."
+	DOMAIN=$(DOMAIN) bash scripts/08_setup_iap.sh
+
+# Automatically add an A-record to Google Cloud DNS if managing DNS in GCP
+dns-record: check
+ifndef DOMAIN
+	$(error DOMAIN is not set. Usage: make dns-record DOMAIN=jupyter.cs.cmu.edu ZONE=cmu-dns-zone)
+endif
+ifndef ZONE
+	$(error ZONE is not set. Usage: make dns-record DOMAIN=jupyter.cs.cmu.edu ZONE=cmu-dns-zone)
+endif
+	@IP=$$(gcloud compute addresses describe tpu-notebooks-ip --global --project=$(PROJECT) --format="value(address)" 2>/dev/null || echo ""); \
+	if [ -z "$$IP" ]; then \
+	  echo "Error: Static IP 'tpu-notebooks-ip' does not exist. Run 'make iap' first." >&2; exit 1; \
+	fi; \
+	echo "==> Mapping $(DOMAIN) -> $$IP in Cloud DNS Managed Zone '$(ZONE)'..."; \
+	gcloud dns record-sets transaction start --zone=$(ZONE) --project=$(PROJECT) 2>/dev/null || true; \
+	gcloud dns record-sets transaction add $$IP --name="$(DOMAIN)." --ttl=300 --type=A --zone=$(ZONE) --project=$(PROJECT); \
+	gcloud dns record-sets transaction execute --zone=$(ZONE) --project=$(PROJECT); \
+	echo "✓ Cloud DNS A-record successfully published!"; \
+	echo "==> Applying domain to Ingress and ManagedCertificate..."; \
+	DOMAIN=$(DOMAIN) bash scripts/08_setup_iap.sh
 
 # Hold warm TPU nodes so the first job of the day skips the 2-4 min node build.
 # Warm chips bill continuously, so turn them off when you are done.
@@ -132,6 +176,9 @@ help:
 	@echo "  make hub PROJECT=...         Deploy JupyterHub Helm chart & student RBAC"
 	@echo "  make smoke PROJECT=...       Submit 1 verification TPU job on 1 v5e chip"
 	@echo "  make iap PROJECT=...         Configure HTTPS Ingress & Google Identity-Aware Proxy"
+	@echo "  make ip PROJECT=...          Show reserved static IP and active domain mapping"
+	@echo "  make domain DOMAIN=...       Reconfigure Ingress/SSL cert for custom university subdomain"
+	@echo "  make dns-record DOMAIN=.. ZONE=.. Auto-create Cloud DNS A-record and apply to Ingress"
 	@echo "  make warm-on PROJECT=...     Hold WARM placeholder chips ready (default WARM=1)"
 	@echo "  make warm-off PROJECT=...    Release warm placeholder chips"
 	@echo "  make scale PROJECT=...       Run concurrency scale test (STUDENTS=15 POOL_CHIPS=32)"
