@@ -18,13 +18,21 @@ CHART_VERSION="${CHART_VERSION:-4.4.1}"
 
 ensure_k8s_context
 
-log_header "Configuring Student RBAC in Namespace '${NAMESPACE}'"
+PROJECT_NUM=$(gcloud projects describe "${PROJECT}" --format="value(projectNumber)" 2>/dev/null || true)
+GSA_EMAIL=""
+if [[ -n "${PROJECT_NUM}" ]]; then
+  GSA_EMAIL="${PROJECT_NUM}-compute@developer.gserviceaccount.com"
+fi
+
+log_header "Configuring Student RBAC and Workload Identity in Namespace '${NAMESPACE}'"
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: student
   namespace: ${NAMESPACE}
+  annotations:
+$(if [[ -n "${GSA_EMAIL}" ]]; then echo "    iam.gke.io/gcp-service-account: ${GSA_EMAIL}"; fi)
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -57,6 +65,20 @@ subjects:
     name: student
     namespace: ${NAMESPACE}
 EOF
+
+if [[ -n "${GSA_EMAIL}" ]]; then
+  gcloud iam service-accounts add-iam-policy-binding \
+    "${GSA_EMAIL}" \
+    --project="${PROJECT}" \
+    --role="roles/iam.workloadIdentityUser" \
+    --member="serviceAccount:${PROJECT}.svc.id.goog[${NAMESPACE}/student]" >/dev/null 2>&1 || true
+
+  if [[ -n "${OCEAN_BUCKET:-}" ]]; then
+    gcloud storage buckets add-iam-policy-binding "gs://${OCEAN_BUCKET}" \
+      --member="serviceAccount:${PROJECT}.svc.id.goog[${NAMESPACE}/student]" \
+      --role="roles/storage.admin" >/dev/null 2>&1 || true
+  fi
+fi
 
 echo "==> helm repo"
 helm repo add jupyterhub https://hub.jupyter.org/helm-chart/ >/dev/null 2>&1 || true

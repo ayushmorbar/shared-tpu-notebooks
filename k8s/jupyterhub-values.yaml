@@ -252,6 +252,12 @@ hub:
           "fsGroup": 1000,
           "fsGroupChangePolicy": "OnRootMismatch"
       }
+    gcsfuse-config: |
+      # Cloud Storage FUSE CSI driver requires sidecar container injection via annotation
+      c.KubeSpawner.extra_pod_annotations = {
+          "gke-gcsfuse/volumes": "true"
+      }
+      c.KubeSpawner.start_timeout = 900
   # Autopilot rejects privileged pods and enforces Pod Security Standards. Give the
   # hub an explicit non-root context rather than letting the chart's default get
   # rewritten by the Autopilot mutating webhook.
@@ -318,6 +324,9 @@ cull:
   maxAge: 28800
 
 singleuser:
+  # GCS FUSE CSI driver requires sidecar container injection via this annotation
+  extraAnnotations:
+    gke-gcsfuse/volumes: "true"
   # z2jh ships a `block-cloud-metadata` initContainer that runs privileged with
   # NET_ADMIN and installs an iptables rule against 169.254.169.254. Autopilot rejects
   # it outright:
@@ -376,7 +385,7 @@ singleuser:
   networkPolicy:
     enabled: true
     egressAllowRules:
-      cloudMetadataServer: false
+      cloudMetadataServer: true
       privateIPs: false
     egress:
       - to:
