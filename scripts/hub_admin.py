@@ -28,23 +28,29 @@ except ImportError:
     HAS_K8S = False
 
 
-def _init_k8s() -> tuple[client.CoreV1Api, str]:
-    """Initialize Kubernetes API client and detect namespace."""
-    if not HAS_K8S:
-        raise RuntimeError("kubernetes Python package is required. Run: pip install kubernetes")
-    try:
-        config.load_incluster_config()
-    except config.ConfigException:
-        config.load_kube_config()
-
-    core = client.CoreV1Api()
+def _get_default_ns() -> str:
+    """Detect current namespace from in-cluster secret or environment."""
     ns_path = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
     if os.path.exists(ns_path):
         with open(ns_path, encoding="utf-8") as f:
-            ns = f.read().strip()
-    else:
-        ns = os.environ.get("COURSE_NAMESPACE", "cmu-idl")
-    return core, ns
+            return f.read().strip()
+    return os.environ.get("COURSE_NAMESPACE") or os.environ.get("NAMESPACE") or os.environ.get("NS") or "cmu-idl"
+
+
+def _init_k8s() -> tuple[Any, str]:
+    """Initialize Kubernetes API client and detect namespace."""
+    if not HAS_K8S:
+        return None, _get_default_ns()
+    try:
+        config.load_incluster_config()
+    except config.ConfigException:
+        try:
+            config.load_kube_config()
+        except Exception:
+            return None, _get_default_ns()
+
+    core = client.CoreV1Api()
+    return core, _get_default_ns()
 
 
 def list_student_storage(namespace: str | None = None) -> list[dict[str, Any]]:
@@ -56,27 +62,59 @@ def list_student_storage(namespace: str | None = None) -> list[dict[str, Any]]:
     Returns:
         list[dict]: List of student PVC records with user, name, size, phase, and storage class.
     """
-    core, default_ns = _init_k8s()
-    ns = namespace or default_ns
+    ns = namespace or _get_default_ns()
+    core, _ = _init_k8s()
 
-    pvcs = core.list_namespaced_persistent_volume_claim(namespace=ns)
-    records = []
-    for pvc in pvcs.items:
-        name = pvc.metadata.name
-        # Match JupyterHub singleuser PVC naming pattern: claim-{user} or claim-jovyan-{user}
-        if name.startswith("claim-"):
-            username = name.replace("claim-jovyan-", "").replace("claim-", "")
-            capacity = pvc.spec.resources.requests.get("storage", "unknown")
-            actual_capacity = pvc.status.capacity.get("storage", capacity) if pvc.status.capacity else capacity
-            records.append({
-                "username": username,
-                "pvc_name": name,
-                "requested_storage": capacity,
-                "actual_storage": actual_capacity,
-                "phase": pvc.status.phase,
-                "storage_class": pvc.spec.storage_class_name,
-            })
-    return sorted(records, key=lambda x: x["username"])
+    if core is not None:
+        try:
+            pvcs = core.list_namespaced_persistent_volume_claim(namespace=ns)
+            records = []
+            for pvc in pvcs.items:
+                name = pvc.metadata.name
+                if name.startswith("claim-"):
+                    username = name.replace("claim-jovyan-", "").replace("claim-", "")
+                    capacity = pvc.spec.resources.requests.get("storage", "unknown")
+                    actual_capacity = pvc.status.capacity.get("storage", capacity) if pvc.status.capacity else capacity
+                    records.append({
+                        "username": username,
+                        "pvc_name": name,
+                        "requested_storage": capacity,
+                        "actual_storage": actual_capacity,
+                        "phase": pvc.status.phase,
+                        "storage_class": pvc.spec.storage_class_name,
+                    })
+            return sorted(records, key=lambda x: x["username"])
+        except Exception:
+            pass
+
+    # Fallback to kubectl CLI (zero python dependencies required)
+    import subprocess
+    import json
+    try:
+        cmd = ["kubectl", "get", "pvc", "-n", ns, "-o", "json"]
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        data = json.loads(res.stdout)
+        records = []
+        for pvc in data.get("items", []):
+            name = pvc["metadata"]["name"]
+            if name.startswith("claim-"):
+                username = name.replace("claim-jovyan-", "").replace("claim-", "")
+                spec_res = pvc.get("spec", {}).get("resources", {}).get("requests", {})
+                capacity = spec_res.get("storage", "unknown")
+                status_cap = pvc.get("status", {}).get("capacity", {})
+                actual_capacity = status_cap.get("storage", capacity) if status_cap else capacity
+                records.append({
+                    "username": username,
+                    "pvc_name": name,
+                    "requested_storage": capacity,
+                    "actual_storage": actual_capacity,
+                    "phase": pvc.get("status", {}).get("phase", "Unknown"),
+                    "storage_class": pvc.get("spec", {}).get("storageClassName", "standard"),
+                })
+        return sorted(records, key=lambda x: x["username"])
+    except Exception as e:
+        print(f"Error querying PVCs via kubectl: {e}", file=sys.stderr)
+        return []
 
 
 def expand_student_storage(username: str, new_size: str, namespace: str | None = None) -> bool:
@@ -93,8 +131,8 @@ def expand_student_storage(username: str, new_size: str, namespace: str | None =
     Returns:
         bool: True if patch succeeded.
     """
-    core, default_ns = _init_k8s()
-    ns = namespace or default_ns
+    ns = namespace or _get_default_ns()
+    core, _ = _init_k8s()
 
     # Normalize username and find matching PVC
     clean_user = username.replace("_", "-").lower()
@@ -103,19 +141,17 @@ def expand_student_storage(username: str, new_size: str, namespace: str | None =
         f"claim-{clean_user}",
     ]
 
-    target_pvc = None
     target_name = None
-    for name in candidate_names:
-        try:
-            pvc = core.read_namespaced_persistent_volume_claim(name=name, namespace=ns)
-            target_pvc = pvc
-            target_name = name
-            break
-        except ApiException as e:
-            if e.status != 404:
-                raise
+    if core is not None:
+        for name in candidate_names:
+            try:
+                core.read_namespaced_persistent_volume_claim(name=name, namespace=ns)
+                target_name = name
+                break
+            except Exception:
+                pass
 
-    if not target_pvc:
+    if not target_name:
         # Fallback: search all PVCs matching the user
         pvcs = list_student_storage(ns)
         for r in pvcs:
@@ -137,13 +173,26 @@ def expand_student_storage(username: str, new_size: str, namespace: str | None =
         }
     }
 
-    try:
-        core.patch_namespaced_persistent_volume_claim(name=target_name, namespace=ns, body=patch_body)
+    if core is not None:
+        try:
+            core.patch_namespaced_persistent_volume_claim(name=target_name, namespace=ns, body=patch_body)
+            print(f"✓ Successfully expanded PVC '{target_name}' for user '{username}' to {new_size} in namespace '{ns}'.")
+            print("  GKE CSI Driver will resize the underlying ext4/xfs filesystem automatically.")
+            return True
+        except Exception:
+            pass
+
+    # Fallback to kubectl CLI
+    import subprocess
+    import json
+    patch_json = json.dumps(patch_body)
+    res = subprocess.run(["kubectl", "patch", "pvc", target_name, "-n", ns, "-p", patch_json], capture_output=True, text=True)
+    if res.returncode == 0:
         print(f"✓ Successfully expanded PVC '{target_name}' for user '{username}' to {new_size} in namespace '{ns}'.")
         print("  GKE CSI Driver will resize the underlying ext4/xfs filesystem automatically.")
         return True
-    except ApiException as e:
-        print(f"✗ Failed to patch PVC '{target_name}': {e}", file=sys.stderr)
+    else:
+        print(f"✗ Failed to patch PVC '{target_name}': {res.stderr}", file=sys.stderr)
         return False
 
 
@@ -163,30 +212,52 @@ def set_user_compute(
         mem_limit (str, optional): Max RAM limit (e.g. '32G', '64G').
         namespace (str, optional): Course namespace.
     """
-    core, default_ns = _init_k8s()
-    ns = namespace or default_ns
+    ns = namespace or _get_default_ns()
+    core, _ = _init_k8s()
     clean_user = username.replace("_", "-").lower()
-
     cm_name = "cmu-user-overrides"
     import json
 
-    try:
-        cm = core.read_namespaced_config_map(name=cm_name, namespace=ns)
-        overrides = json.loads(cm.data.get("overrides.json", "{}"))
-    except ApiException as e:
-        if e.status == 404:
-            overrides = {}
-            cm = client.V1ConfigMap(
-                metadata=client.V1ObjectMeta(name=cm_name, namespace=ns),
-                data={"overrides.json": "{}"},
-            )
-            core.create_namespaced_config_map(namespace=ns, body=cm)
-        else:
-            raise
+    if core is not None:
+        try:
+            try:
+                cm = core.read_namespaced_config_map(name=cm_name, namespace=ns)
+                overrides = json.loads(cm.data.get("overrides.json", "{}"))
+            except Exception as e:
+                overrides = {}
+                cm = client.V1ConfigMap(
+                    metadata=client.V1ObjectMeta(name=cm_name, namespace=ns),
+                    data={"overrides.json": "{}"},
+                )
+                core.create_namespaced_config_map(namespace=ns, body=cm)
+
+            if clean_user not in overrides:
+                overrides[clean_user] = {}
+            if cpu_limit is not None:
+                overrides[clean_user]["cpu_limit"] = cpu_limit
+                overrides[clean_user]["cpu_guarantee"] = max(1, cpu_limit // 2)
+            if mem_limit is not None:
+                overrides[clean_user]["mem_limit"] = mem_limit
+                overrides[clean_user]["mem_guarantee"] = "8G"
+
+            cm.data["overrides.json"] = json.dumps(overrides, indent=2)
+            core.replace_namespaced_config_map(name=cm_name, namespace=ns, body=cm)
+            print(f"✓ Successfully updated compute quota for '{clean_user}': {overrides[clean_user]}")
+            return True
+        except Exception:
+            pass
+
+    # Fallback to kubectl CLI
+    import subprocess
+    res = subprocess.run(["kubectl", "get", "configmap", cm_name, "-n", ns, "-o", "json"], capture_output=True, text=True)
+    if res.returncode == 0:
+        cm_dict = json.loads(res.stdout)
+        overrides = json.loads(cm_dict.get("data", {}).get("overrides.json", "{}"))
+    else:
+        overrides = {}
 
     if clean_user not in overrides:
         overrides[clean_user] = {}
-
     if cpu_limit is not None:
         overrides[clean_user]["cpu_limit"] = cpu_limit
         overrides[clean_user]["cpu_guarantee"] = max(1, cpu_limit // 2)
@@ -194,13 +265,18 @@ def set_user_compute(
         overrides[clean_user]["mem_limit"] = mem_limit
         overrides[clean_user]["mem_guarantee"] = "8G"
 
-    cm.data["overrides.json"] = json.dumps(overrides, indent=2)
-    try:
-        core.replace_namespaced_config_map(name=cm_name, namespace=ns, body=cm)
+    cm_manifest = json.dumps({
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {"name": cm_name, "namespace": ns},
+        "data": {"overrides.json": json.dumps(overrides, indent=2)}
+    })
+    apply_res = subprocess.run(["kubectl", "apply", "-f", "-"], input=cm_manifest, text=True, capture_output=True)
+    if apply_res.returncode == 0:
         print(f"✓ Successfully updated compute quota for '{clean_user}': {overrides[clean_user]}")
         return True
-    except ApiException as e:
-        print(f"✗ Failed to update compute overrides: {e}", file=sys.stderr)
+    else:
+        print(f"✗ Failed to apply compute overrides: {apply_res.stderr}", file=sys.stderr)
         return False
 
 

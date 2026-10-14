@@ -246,6 +246,12 @@ hub:
               pass
 
       c.KubeSpawner.pre_spawn_hook = apply_custom_user_resources
+    pod-security: |
+      # Skip recursive chown across 500k+ file dataset directories; checks only root directory
+      c.KubeSpawner.pod_security_context = {
+          "fsGroup": 1000,
+          "fsGroupChangePolicy": "OnRootMismatch"
+      }
   # Autopilot rejects privileged pods and enforces Pod Security Standards. Give the
   # hub an explicit non-root context rather than letting the chart's default get
   # rewritten by the Autopilot mutating webhook.
@@ -417,6 +423,9 @@ singleuser:
     # GKE Sandbox (gVisor) provides strong container isolation. Cloud TPU pods
     # cannot use gVisor, so this is disabled on the Pinned TPU profile.
     runtimeClassName: gvisor
+    securityContext:
+      fsGroup: 1000
+      fsGroupChangePolicy: "OnRootMismatch"
   extraEnv:
     KUEUE_LOCAL_QUEUE: "tpu"
     # submit_tpu.py is mounted here rather than into /home/jovyan, because the home
