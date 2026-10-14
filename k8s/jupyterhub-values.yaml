@@ -33,6 +33,7 @@ hub:
       # Local part of the Google identity IAP forwards, i.e. everything before the @.
       admin_users:
         - instructor
+        - amorbar
       # IAP decides who gets in. Anyone reaching the hub has already been checked by
       # Google against roles/iap.httpsResourceAccessor, so a second allowlist here would
       # only reject people IAP just admitted. Without this, JupyterHub authenticates the
@@ -181,6 +182,54 @@ hub:
               return None
 
       c.JupyterHub.authenticator_class = IAPAuthenticator
+    profile-visibility: |
+      # Dynamic profile filtering: Privileged users (admins, amorbar, staff, tpu-access)
+      # see the full menu of workstation and pinned TPU profiles. Standard students
+      # see only the course default CPU profile to eliminate accelerator cost leakage.
+      def filter_profile_list(spawner):
+          user = spawner.user
+          all_profiles = spawner._profile_list or []
+          if not all_profiles:
+              return []
+
+          user_groups = [g.name if hasattr(g, 'name') else str(g) for g in getattr(user, 'groups', [])]
+          is_privileged = (
+              getattr(user, 'admin', False) or
+              user.name in ['amorbar', 'instructor'] or
+              any(g in ['staff', 'admin', 'tpu-access'] for g in user_groups)
+          )
+
+          if is_privileged:
+              return all_profiles
+          return [p for p in all_profiles if not p.get('allowed_groups')]
+
+      c.KubeSpawner.profile_list = filter_profile_list
+    user-resource-overrides: |
+      import json
+      from kubernetes import client
+
+      # Dynamically apply custom CPU / RAM overrides set via hub_admin.py
+      async def apply_custom_user_resources(spawner):
+          user = spawner.user
+          try:
+              core = client.CoreV1Api()
+              cm = core.read_namespaced_config_map("cmu-user-overrides", spawner.namespace)
+              overrides = json.loads(cm.data.get("overrides.json", "{}"))
+              clean_name = user.name.replace("_", "-").lower()
+              if clean_name in overrides:
+                  cfg = overrides[clean_name]
+                  if "cpu_limit" in cfg:
+                      spawner.cpu_limit = cfg["cpu_limit"]
+                  if "mem_limit" in cfg:
+                      spawner.mem_limit = cfg["mem_limit"]
+                  if "cpu_guarantee" in cfg:
+                      spawner.cpu_guarantee = cfg["cpu_guarantee"]
+                  if "mem_guarantee" in cfg:
+                      spawner.mem_guarantee = cfg["mem_guarantee"]
+          except Exception:
+              pass
+
+      c.KubeSpawner.pre_spawn_hook = apply_custom_user_resources
   # Autopilot rejects privileged pods and enforces Pod Security Standards. Give the
   # hub an explicit non-root context rather than letting the chart's default get
   # rewritten by the Autopilot mutating webhook.
@@ -343,34 +392,34 @@ singleuser:
     # submit_tpu.py is mounted here rather than into /home/jovyan, because the home
     # directory is a PVC and a ConfigMap mount would fight it.
     PYTHONPATH: "/opt/course"
+    # Scans shared Ocean storage for course kernels (e.g. /ocean/envs/idl-shared-env)
+    JUPYTER_PATH: "/ocean/share/jupyter:/opt/conda/share/jupyter"
+  # Central "Ocean" course storage: shared across all student and staff pods.
+  # Read-only for students; overridden to Read-Write for instructors in Admin Workstation.
+  extraVolumes:
+    - name: course-ocean
+      csi:
+        driver: gcsfuse.csi.storage.gke.io
+        volumeAttributes:
+          bucketName: __OCEAN_BUCKET__
+          mountOptions: "implicit-dirs,ro"
+  extraVolumeMounts:
+    - name: course-ocean
+      mountPath: /ocean
   # 03_deploy_hub.sh fills stringData from notebooks/submit_tpu.py with helm
   # --set-file, so the helper stays one real file instead of a copy pasted into YAML.
   extraFiles:
     submit_tpu.py:
       mountPath: /opt/course/submit_tpu.py
       stringData: "placeholder, replaced at deploy time"
-    hw0_tpu_hello.ipynb:
-      mountPath: /opt/course/hw0_tpu_hello.ipynb
-      stringData: "placeholder, replaced at deploy time"
-  # Two jobs at spawn.
-  #
-  # 1. Install the kubernetes client. The scipy-notebook image has none and
-  #    submit_tpu.py needs one. Bake this into a course image for a real term.
-  #
-  # 2. Copy the assignment into the student's home directory. extraFiles mounts are
-  #    read-only ConfigMap volumes, so the notebook cannot live in /home/jovyan
-  #    directly -- the home directory is a PVC and the two would fight. Mount it under
-  #    /opt/course and copy on first spawn instead.
-  #
-  #    `cp -n` matters: without it, every restart would overwrite the student's work
-  #    with the blank assignment.
+  # Clean student workspace: students upload and extract their official assignment handout.
   lifecycleHooks:
     postStart:
       exec:
         command:
           - "sh"
           - "-c"
-          - "cp -n /opt/course/hw0_tpu_hello.ipynb /home/jovyan/ 2>/dev/null || true"
+          - "mkdir -p /home/jovyan/checkpoints /home/jovyan/data 2>/dev/null || true"
   startTimeout: 600  # Extend from default 300s to 600s for dynamic GKE Autopilot node scale-up and CSI disk attachment
   defaultUrl: "/lab"
   image:
@@ -395,28 +444,29 @@ singleuser:
         node_selector:
           cloud.google.com/gke-spot: "true"
 
-    # Commented out for general students to protect regional CPU quotas.
-    # Staff / instructors who need large compute can use the staff profile below.
-    # - display_name: "Large CPU notebook"
-    #   description: >-
-    #     8 vCPU, 32 GB, for dataset preprocessing, tokenizer training, or an
-    #     in-memory image cache. Still no accelerator — TPU work goes through the
-    #     queue.
-    #   kubespawner_override:
-    #     cpu_limit: 8
-    #     cpu_guarantee: 8
-    #     mem_limit: 32G
-    #     mem_guarantee: 32G
-    #     node_selector:
-    #       cloud.google.com/gke-spot: "true"
+    - display_name: "Admin / Power User CPU Workstation"
+      description: >-
+        16 vCPU, 64 GiB RAM, 100 GiB scratch. High-throughput data caching, tokenization,
+        and distributed preprocessing for course maintainers (amorbar / staff).
+      allowed_groups:
+        - staff
+        - admin
+      kubespawner_override:
+        cpu_limit: 16
+        cpu_guarantee: 8
+        mem_limit: "64G"
+        mem_guarantee: "32G"
+        node_selector:
+          cloud.google.com/gke-spot: "false"
 
-    - display_name: "Pinned TPU v5e notebook (staff only)"
+    - display_name: "Pinned TPU v5e-1 notebook (staff only)"
       description: >-
         One v5e chip attached to the notebook for as long as it runs, for interactive
         debugging. Bills the whole ct5lp-hightpu-1t node at about $1.35/hr. Staff only,
         because a class of 300 doing this is $360/hr.
       allowed_groups:
         - staff
+        - admin
       kubespawner_override:
         image: us-docker.pkg.dev/cloud-tpu-images/jax-ai-image/tpu:latest
         extra_resource_limits:
@@ -434,4 +484,26 @@ singleuser:
             effect: NoSchedule
         # Shorter leash than the CPU profiles. An idle pinned chip is the single most
         # expensive thing a person can leave running in this cluster.
+        cull_timeout: 1800
+
+    - display_name: "Pinned TPU v5e-4 Podslice (4 chips - 2x2 topology, staff/admin only)"
+      description: >-
+        Four v5e chips attached directly to the notebook in a 2x2 mesh topology for
+        multi-device data and model parallelism pre-flight testing and benchmarking.
+      allowed_groups:
+        - staff
+        - admin
+      kubespawner_override:
+        image: us-docker.pkg.dev/cloud-tpu-images/jax-ai-image/tpu:latest
+        extra_resource_limits:
+          google.com/tpu: "4"
+        extra_pod_config:
+          runtimeClassName: ""
+        node_selector:
+          cloud.google.com/gke-tpu-accelerator: tpu-v5-lite-podslice
+          cloud.google.com/gke-tpu-topology: 2x2
+        tolerations:
+          - key: google.com/tpu
+            operator: Exists
+            effect: NoSchedule
         cull_timeout: 1800

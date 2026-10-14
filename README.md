@@ -315,15 +315,70 @@ Confirm regional quota for the target generation via `make preflight` before mod
 
 ---
 
-## 12. Repository Layout
+## 12. Long Training Runs & Large-Scale Dataset Caching
+
+While `submit_tpu.run()` sends code as an inline string and deletes the Job upon return (ideal for interactive exercises), long training runs like CMU 11-785 HW2P2 (40 epochs across 431,550 images) require a persistent script, scratch storage, checkpointing, and resume capabilities.
+
+`submit_tpu.train()` provides this dedicated execution path:
+
+```python
+import submit_tpu
+
+# Submits training script to Kueue, streams logs live, and returns predictions to /home/jovyan/
+submit_tpu.train("hw2p2_train.py", epochs=40)
+```
+
+The script is read from the student's notebook disk and mounted into the pod via a Kubernetes ConfigMap. The pod runs as the `student` ServiceAccount with Workload Identity to reach Google Cloud Storage without human keys.
+
+### Measured Benchmarks on Real HW2P2 Data (One Cloud TPU v5e)
+
+Tested on 431,550 face images at 112×112 resolution pre-processed into `.npy` cache:
+
+| Step | Benchmark Result | Operational Impact |
+| :--- | :--- | :--- |
+| **Secret Verification** | `present, len=28, sha256[:8]=17a06d0d` | Value never printed in logs or committed to git |
+| **GCS Cache Copy** | **18.46 GiB copied in 78–117s** (161–243 MiB/s) | Line-rate sequential copy from in-region GCS (`us-west4`) |
+| **In-RAM Residency** | `VmRSS: 24,173,496 kB` on 47 GiB node | Entire dataset fits in node RAM; **0 disk/network I/O** across 40 epochs |
+| **Durable Checkpoints** | Steps 0 and 1 streamed to GCS | Orbax `CheckpointManager` persists state outliving the pod |
+| **Fault-Tolerant Resume**| `RESUMING from step 1` | Second run automatically restarts at epoch 2 |
+| **Retention Policy** | `steps available: [2, 3]` | Older checkpoints pruned via modern preservation policy |
+
+### Three Critical Operational Rules
+
+1. **Copy the Cache to Local Scratch; Never FUSE-Mount It:**
+   Deep learning dataloaders shuffle images randomly. Random object reads through GCS FUSE create massive HTTP range-request overhead. A single sequential copy at startup takes ~90s and places the entire 18.5 GiB cache into node RAM (`VmRSS ~24 GB` on 47 GiB node), resulting in zero-I/O training.
+2. **Bucket IAM Permissions for Orbax:**
+   `roles/storage.objectAdmin` is not sufficient for Orbax. Its GCS backend calls `storage.buckets.get`, which causes `CheckpointManager` construction to fail with HTTP 403 Forbidden. You must bind `roles/storage.legacyBucketReader` on the cache bucket:
+   ```bash
+   PROJECT_NUM=$(gcloud projects describe ${PROJECT} --format="value(projectNumber)")
+   gcloud storage buckets add-iam-policy-binding gs://hw2p2-cached-data \
+     --member="serviceAccount:${PROJECT_NUM}-compute@developer.gserviceaccount.com" \
+     --role="roles/storage.legacyBucketReader"
+   ```
+3. **Warm Node Latency Advantage:**
+   A cold on-demand Cloud TPU v5e in `us-west4` can take up to 16 minutes for GKE Autopilot to provision and boot. A job dispatched against a warm node starts executing in ~131 seconds. Use `scripts/07_warm_pool.sh` to maintain a warm standby chip during active lab sessions.
+
+---
+
+## 13. Repository Structure
 
 ```
 shared-tpu-notebooks/
+├── CHANGELOG.md                 # Version history, features, and deprecations
 ├── Makefile                     # Central build, deploy, test, and teardown interface
 ├── README.md                    # Complete architectural and operational manual
+├── SECURITY.md                  # Security policies, student credential privacy, & reporting
+├── config.env.example           # Centralized environment configuration template
+├── docs/                        # Architectural runbooks & developer guides
+│   ├── architecture.md          # Multi-layer platform architecture specification
+│   ├── cost_management.md       # Financial modeling, Spot pricing, & billing formulas
+│   ├── developer_guide.md       # Engineering standards, bash style guide, & testing
+│   ├── getting_started.md       # Administrator setup walkthrough
+│   ├── student_guide.md         # Student guide: credentials, training, & Gradescope
+│   └── troubleshooting.md       # Runbooks for quota, Kueue, IAP, and OOM issues
 ├── docker/
 │   ├── Dockerfile               # Scipy-notebook image extended with JAX TPU stack
-│   └── requirements.txt         # Pinned Python ML dependencies (JAX, PyTorch, W&B)
+│   └── requirements.txt         # Pinned Python ML dependencies (JAX, Flax NNX, PyTorch, W&B)
 ├── k8s/
 │   ├── ingress-iap.yaml         # L7 Ingress, BackendConfig, and ManagedCertificate
 │   ├── jupyterhub-values.yaml   # Zero-to-JupyterHub Helm configuration & security profiles
@@ -332,8 +387,12 @@ shared-tpu-notebooks/
 │   ├── student-tpu-job.yaml     # Declarative batch Job template for TPU runs
 │   └── tpu-warm-pool.yaml       # Priority -10 placeholder deployment & auto-off CronJob
 ├── notebooks/
+│   ├── F26_HW2P2_JAX_TPU_Hub.ipynb # Full student homework notebook (JupyterHub edition)
 │   ├── hw0_tpu_hello.ipynb      # Sample assignment: Attention FLOPs & roofline analysis
-│   └── submit_tpu.py            # Client library for submitting TPU jobs from notebooks
+│   ├── hw2p2_train.py           # Production ResNet-34 + ElasticFace student training script
+│   ├── student.env.template     # Per-student private credential template (/home/jovyan/.env)
+│   ├── submit_tpu.py            # Client library (run & train) for submitting TPU jobs
+│   └── train_hw2p2.py           # Staff benchmark and smoke-test harness
 └── scripts/
     ├── 00_preflight.sh          # Regional quota and accelerator discovery (Read-only)
     ├── 01_build_image.sh        # Artifact Registry repo creation and Docker build/push
@@ -346,11 +405,13 @@ shared-tpu-notebooks/
     ├── 07_warm_pool.sh          # CLI tool to manage warm TPU node placeholders
     ├── 08_setup_iap.sh          # Cloud IAP, static IP, and IAM binding automation
     ├── 10_cleanup_pvcs.sh       # End-of-term PVC and retained persistent disk cleanup
+    ├── 11_expand_pvcs.sh        # Student persistent volume expansion to 32Gi
+    ├── 12_create_secrets.sh     # Optional course credentials Kubernetes Secret creator
     └── 99_teardown.sh           # Full infrastructure teardown with zero-cost verification
 ```
 
 ---
 
-## 13. License
+## 14. License
 
 Apache 2.0. See [`LICENSE`](LICENSE) for details.

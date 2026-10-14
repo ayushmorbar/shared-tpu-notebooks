@@ -49,6 +49,14 @@ TA_GROUP="${TA_GROUP:-}"
 ADMIN_USERS="${ADMIN_USERS:-}"
 TEST_ACCOUNTS="${TEST_ACCOUNTS:-}"
 
+OCEAN_BUCKET="${OCEAN_BUCKET:-cmu-idl-ocean}"
+OCEAN_URI="${OCEAN_URI:-gs://${OCEAN_BUCKET}}"
+
+DATA_URI="${DATA_URI:-gs://hw2p2-cached-data/img_cache}"
+CKPT_ROOT="${CKPT_ROOT:-gs://hw2p2-cached-data/checkpoints}"
+SUBMISSION_ROOT="${SUBMISSION_ROOT:-gs://hw2p2-cached-data/submissions}"
+SECRET_NAME="${SECRET_NAME:-course-secrets}"
+
 # GKE Cluster Context Identifier
 GKE_CTX="gke_${PROJECT}_${REGION}_${CLUSTER}"
 

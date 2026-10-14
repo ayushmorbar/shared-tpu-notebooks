@@ -25,7 +25,7 @@ TPU_IMAGE       ?= us-docker.pkg.dev/cloud-tpu-images/jax-ai-image/tpu:latest
 
 export PROJECT REGION CLUSTER NS NAMESPACE=$(NS) STUDENTS POOL_CHIPS WARM DOMAIN STUDENT_GROUP TA_GROUP ADMIN_USERS TEST_ACCOUNTS TPU_ACCELERATOR TPU_TOPOLOGY TPU_IMAGE
 
-.PHONY: check preflight cluster image hub iap warm-on warm-off demo smoke scale report expand-pvcs expand-pvcs-dry-run clean-pvcs clean-pvcs-dry-run teardown venv help
+.PHONY: check preflight cluster image hub iap warm-on warm-off demo smoke scale report expand-pvcs expand-pvcs-dry-run clean-pvcs clean-pvcs-dry-run secrets teardown venv help
 
 # Ensure the PROJECT variable is set before proceeding.
 check:
@@ -92,6 +92,10 @@ expand-pvcs-dry-run: check
 
 expand-pvcs: check
 	bash scripts/11_expand_pvcs.sh --execute
+
+# Optional: Create baseline Kubernetes Secret for cluster infrastructure
+secrets: check
+	bash scripts/12_create_secrets.sh
 
 # Clean up retained PVCs and underlying GCP persistent disks at end of term
 clean-pvcs-dry-run: check
