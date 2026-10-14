@@ -183,42 +183,51 @@ hub:
 
       c.JupyterHub.authenticator_class = IAPAuthenticator
     profile-visibility: |
+      import inspect
+
       # Dynamic profile filtering: Privileged users (admins, amorbar, staff) see all profiles.
       # Group members (project-grant-tier1, tpu-access) see unlocked grant profiles.
       # Standard students see only unrestricted profiles (Course default CPU).
-      def filter_profile_list(spawner):
+      async def dynamic_profile_form(spawner):
           user = spawner.user
-          all_profiles = spawner._profile_list or []
+          if not hasattr(spawner, '_original_profile_list'):
+              spawner._original_profile_list = list(spawner.profile_list or [])
+
+          all_profiles = spawner._original_profile_list
           if not all_profiles:
-              return []
+              res = spawner._options_form_default()
+              return await res if inspect.isawaitable(res) else res
 
           user_groups = [g.name if hasattr(g, 'name') else str(g) for g in getattr(user, 'groups', [])]
           is_admin = (
               getattr(user, 'admin', False) or
-              user.name in ['amorbar', 'instructor'] or
+              user.name in ['amorbar', 'instructor', 'bwarren2'] or
               any(g in ['staff', 'admin'] for g in user_groups)
           )
 
           filtered = []
           for p in all_profiles:
               allowed = p.get('allowed_groups')
-              if not allowed:
+              if not allowed or is_admin or any(g in user_groups for g in allowed):
                   filtered.append(p)
-              elif is_admin:
-                  filtered.append(p)
-              elif any(g in user_groups for g in allowed):
-                  filtered.append(p)
-          return filtered
 
-      c.KubeSpawner.profile_list = filter_profile_list
+          spawner.profile_list = filtered
+          res = spawner._options_form_default()
+          return await res if inspect.isawaitable(res) else res
+
+      c.KubeSpawner.options_form = dynamic_profile_form
     user-resource-overrides: |
       import json
-      from kubernetes import client
 
       # Dynamically apply custom CPU / RAM overrides set via hub_admin.py
       async def apply_custom_user_resources(spawner):
           user = spawner.user
           try:
+              from kubernetes import client, config
+              try:
+                  config.load_incluster_config()
+              except Exception:
+                  config.load_kube_config()
               core = client.CoreV1Api()
               cm = core.read_namespaced_config_map("cmu-user-overrides", spawner.namespace)
               overrides = json.loads(cm.data.get("overrides.json", "{}"))
