@@ -97,7 +97,7 @@ spec:
 
               if [ ! -d "${SHARED_ENV_PATH}" ]; then
                 echo "==> Creating virtual environment at ${SHARED_ENV_PATH}..."
-                python3 -m venv "${SHARED_ENV_PATH}" --system-site-packages
+                python3 -m venv "${SHARED_ENV_PATH}" --system-site-packages --copies
               fi
 
               echo "==> Upgrading pip..."
@@ -110,7 +110,8 @@ spec:
               "${SHARED_ENV_PATH}/bin/python" -m ipykernel install \
                 --prefix="${TARTAN_MOUNT_PATH}" \
                 --name="${KERNEL_NAME}" \
-                --display-name="${DISPLAY_NAME}"
+                --display-name="${DISPLAY_NAME}" \
+                --env PYTHONPATH "${SHARED_ENV_PATH}/lib/python3.11/site-packages:/opt/course"
 
               echo "✓ Shared environment '${ENV_NAME}' successfully initialized!"
           volumeMounts:
@@ -130,12 +131,30 @@ spec:
             name: ${CM_NAME}
 EOF
 
-log_info "Waiting for environment builder job to complete..."
-kubectl -n "${NAMESPACE}" wait --for=condition=complete "job/${JOB_NAME}" --timeout=1200s 2>/dev/null || {
-  log_warn "Job did not complete within timeout. Streaming logs for diagnosis:"
-  kubectl -n "${NAMESPACE}" logs "job/${JOB_NAME}" -c env-builder --tail=80
+log_info "Waiting for builder pod to schedule and initialize..."
+POD_NAME=""
+for i in {1..60}; do
+  POD_NAME=$(kubectl -n "${NAMESPACE}" get pods -l job-name="${JOB_NAME}" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+  if [[ -n "${POD_NAME}" ]]; then
+    break
+  fi
+  sleep 2
+done
+
+if [[ -z "${POD_NAME}" ]]; then
+  log_warn "Pod for job '${JOB_NAME}' not found after 120s."
   exit 1
-}
+fi
+
+log_info "Builder Pod: ${POD_NAME}"
+log_info "Streaming build and package installation logs in real time..."
+kubectl -n "${NAMESPACE}" logs -f "${POD_NAME}" -c env-builder --pod-running-timeout=10m || true
+
+if ! kubectl -n "${NAMESPACE}" wait --for=condition=complete "job/${JOB_NAME}" --timeout=30s >/dev/null 2>&1; then
+  log_warn "Job did not report complete. Fetching diagnostic pod events:"
+  kubectl -n "${NAMESPACE}" describe pod "${POD_NAME}" | tail -n 25
+  exit 1
+fi
 
 log_success "Shared course environment '${ENV_NAME}' is active and ready on ${SHARED_ENV_PATH}."
 log_info "Jupyter Kernel registered: '${DISPLAY_NAME}'."
