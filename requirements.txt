@@ -9,8 +9,7 @@
 
 # Core JAX and Accelerator Stack
 jax[tpu]
-optax
-flax
+jax-ai-stack>=2025.10.28
 
 # PyTorch Ecosystem
 torch
