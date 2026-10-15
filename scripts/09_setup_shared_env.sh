@@ -18,11 +18,27 @@ source "$(dirname "$0")/common.sh"
 require_project
 check_prereqs kubectl
 
-ENV_NAME="${ENV_NAME:-${SHARED_ENV_NAME:-idlf26jax}}"
-REQ_FILE="${REQ_FILE:-${REQUIREMENTS_FILE:-requirements.txt}}"
+ENV_NAME="${ENV:-${ENV_NAME:-${SHARED_ENV_NAME:-idlf26jax}}}"
+REQ_FILE="${REQ:-${REQ_FILE:-${REQUIREMENTS_FILE:-requirements.txt}}}"
 ENV_BUILDER_CPU="${ENV_BUILDER_CPU:-2}"
 ENV_BUILDER_MEMORY="${ENV_BUILDER_MEMORY:-8Gi}"
 ENV_BUILDER_STORAGE="${ENV_BUILDER_STORAGE:-10Gi}"
+
+# Strip stray outer quotes if passed from makefile or shell
+ENV_NAME="${ENV_NAME%\"}"
+ENV_NAME="${ENV_NAME#\"}"
+ENV_NAME="${ENV_NAME%\'}"
+ENV_NAME="${ENV_NAME#\'}"
+REQ_FILE="${REQ_FILE%\"}"
+REQ_FILE="${REQ_FILE#\"}"
+REQ_FILE="${REQ_FILE%\'}"
+REQ_FILE="${REQ_FILE#\'}"
+ENV_BUILDER_CPU="${ENV_BUILDER_CPU%\"}"
+ENV_BUILDER_CPU="${ENV_BUILDER_CPU#\"}"
+ENV_BUILDER_MEMORY="${ENV_BUILDER_MEMORY%\"}"
+ENV_BUILDER_MEMORY="${ENV_BUILDER_MEMORY#\"}"
+ENV_BUILDER_STORAGE="${ENV_BUILDER_STORAGE%\"}"
+ENV_BUILDER_STORAGE="${ENV_BUILDER_STORAGE#\"}"
 
 # Resolve path to requirements.txt (relative to repo root or cwd)
 if [[ ! -f "${REQ_FILE}" ]]; then
@@ -154,7 +170,8 @@ for i in {1..60}; do
 done
 
 if [[ -z "${POD_NAME}" ]]; then
-  log_warn "Pod for job '${JOB_NAME}' not found after 120s."
+  log_warn "Pod for job '${JOB_NAME}' not found after 120s. Job diagnostics:"
+  kubectl -n "${NAMESPACE}" describe job "${JOB_NAME}" || true
   exit 1
 fi
 

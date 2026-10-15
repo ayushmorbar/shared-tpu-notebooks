@@ -58,9 +58,7 @@ image:
 #   make shared-env                                (defaults to idlf26jax and requirements.txt)
 #   make shared-env ENV=capstone-nlp REQ=reqs.txt
 shared-env: check
-	ENV_NAME="$(or $(ENV),$(SHARED_ENV_NAME),idlf26jax)" \
-	REQ_FILE="$(or $(REQ),$(REQUIREMENTS_FILE),requirements.txt)" \
-	bash scripts/09_setup_shared_env.sh
+	ENV="$(ENV)" REQ="$(REQ)" bash scripts/09_setup_shared_env.sh
 
 # Provision the GKE Autopilot cluster, Kueue configurations, and StorageClasses.
 cluster: check
