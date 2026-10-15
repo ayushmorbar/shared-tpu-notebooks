@@ -125,7 +125,7 @@ spec:
             driver: gcsfuse.csi.storage.gke.io
             volumeAttributes:
               bucketName: ${TARTAN_BUCKET:-${OCEAN_BUCKET:-cmu-idl-ocean}}
-              mountOptions: "implicit-dirs,file-cache:max-size-mb:20000,metadata-cache:ttl-secs:60"
+              mountOptions: "implicit-dirs,file-cache:max-size-mb:20000,metadata-cache:ttl-secs:60,uid=1000,gid=1000,dir-mode=0777,file-mode=0777"
         - name: requirements-vol
           configMap:
             name: ${CM_NAME}

@@ -415,7 +415,7 @@ singleuser:
           driver: gcsfuse.csi.storage.gke.io
           volumeAttributes:
             bucketName: __TARTAN_BUCKET__
-            mountOptions: "implicit-dirs,file-cache:max-size-mb:50000,metadata-cache:stat-cache-max-size-mb:2048,metadata-cache:ttl-secs:86400,ro"
+            mountOptions: "implicit-dirs,file-cache:max-size-mb:50000,metadata-cache:stat-cache-max-size-mb:2048,metadata-cache:ttl-secs:86400,uid=1000,gid=1000,ro"
     extraVolumeMounts:
       - name: course-tartan
         mountPath: /tartan/11785
@@ -527,7 +527,7 @@ singleuser:
               driver: gcsfuse.csi.storage.gke.io
               volumeAttributes:
                 bucketName: __TARTAN_BUCKET__
-                mountOptions: "implicit-dirs,file-cache:max-size-mb:50000,metadata-cache:stat-cache-max-size-mb:2048,metadata-cache:ttl-secs:60"
+                mountOptions: "implicit-dirs,file-cache:max-size-mb:50000,metadata-cache:stat-cache-max-size-mb:2048,metadata-cache:ttl-secs:60,uid=1000,gid=1000,dir-mode=0777,file-mode=0777"
 
     - display_name: "Pinned TPU v5e-1 notebook (staff & capstone grants)"
       description: >-
