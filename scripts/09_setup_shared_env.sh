@@ -25,8 +25,6 @@ REQ_FILE="${REQ_FILE:-${REQUIREMENTS_FILE:-requirements.txt}}"
 if [[ ! -f "${REQ_FILE}" ]]; then
   if [[ -f "${REPO_ROOT}/${REQ_FILE}" ]]; then
     REQ_FILE="${REPO_ROOT}/${REQ_FILE}"
-  elif [[ -f "${REPO_ROOT}/docker/requirements.txt" ]]; then
-    REQ_FILE="${REPO_ROOT}/docker/requirements.txt"
   else
     echo "Error: Requirements file '${REQ_FILE}' not found." >&2
     exit 1

@@ -43,10 +43,12 @@ endif
 preflight: check
 	bash scripts/00_preflight.sh
 
-# (Optional/Legacy) Build custom course image. Note: Platform now uses official upstream
-# quay.io/jupyter/scipy-notebook + zero-rebuild shared environments on /tartan/11785.
-image: check
-	bash scripts/01_build_image.sh
+# (Obsolete) Custom Docker images are eliminated in favor of official upstream
+# quay.io/jupyter/scipy-notebook + zero-rebuild shared environments on Tartan store.
+image:
+	@echo "Notice: Custom Docker builds have been eliminated in favor of official upstream"
+	@echo "quay.io/jupyter/scipy-notebook:2024-11-11 paired with zero-rebuild shared environments."
+	@echo "Run 'make shared-env [ENV=...] [REQ=...]' to provision course environments."
 
 # Provision or update a zero-rebuild shared Python environment on Tartan GCS store.
 # Usage:
@@ -187,7 +189,7 @@ teardown: check
 help:
 	@echo "shared-tpu-notebooks Makefile commands:"
 	@echo "  make preflight PROJECT=...   Check regional quota and accelerator types (free)"
-	@echo "  make image PROJECT=...       Build & push custom course image to Artifact Registry"
+	@echo "  make shared-env [ENV=..]     Provision/update zero-rebuild shared Python env from requirements.txt"
 	@echo "  make cluster PROJECT=...     Create GKE Autopilot cluster, Kueue, & quotas (~12m)"
 	@echo "  make hub PROJECT=...         Deploy JupyterHub Helm chart & student RBAC"
 	@echo "  make smoke PROJECT=...       Submit 1 verification TPU job on 1 v5e chip"
