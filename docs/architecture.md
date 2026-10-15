@@ -69,7 +69,10 @@ sequenceDiagram
 
 The Job's `podFailurePolicy` ignores pods that fail with a `DisruptionTarget` condition (preemption, node maintenance, Kueue eviction). A new pod starts, downloads that Job's last uploaded `expts/`, and the training script resumes from its last checkpoint. A non-zero exit from the student's own code fails the Job instead of retrying it. To continue a finished, failed, or timed-out run, the student submits again with `resume_from=<old job>`.
 
-### Bucket layout
+### Bucket layout & Tartan storage
+
+- **Shared Tartan Bucket (`gs://TARTAN_BUCKET`)**: Mounted via the GKE GCS FUSE CSI driver at `/tartan/11785` and `/ocean` on both CPU notebooks and TPU job pods. Students and TPU jobs get a read-only mount (`student` and `tpu-job` KSAs have `roles/storage.objectViewer`); staff pods and `make shared-env` jobs run under `tartan-admin` (`roles/storage.objectAdmin`) with read-write access. Holds shared virtual environments (`/tartan/11785/envs/idlf26jax`), Jupyter kernels, and shared datasets (`/tartan/11785/datasets/`).
+- **Private Student Runs Bucket (`gs://STUDENT_BUCKET`)**: Accessible exclusively by the `tpu-submit` service (`roles/storage.objectAdmin`). Students never access this bucket directly; `tpu-submit` isolates every student under their own prefix:
 
 ```
 gs://STUDENT_BUCKET/users/<student>/jobs/<job id>/

@@ -16,7 +16,13 @@ config.env
 # Benchmark & Test Results
 results/
 *.log
+.pytest_cache/
+tpu_runs/
 
 # OS Metadata
 .DS_Store
 Thumbs.db
+
+# Mis
+.tmp/
+.cursor/

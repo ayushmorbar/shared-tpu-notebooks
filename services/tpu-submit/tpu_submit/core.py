@@ -29,6 +29,7 @@ from .jobspec import build_job, build_secret
 from .store import Store, Writer
 
 _ENV_KEY_RE = re.compile(r"^[A-Z_][A-Z0-9_]{0,63}$")
+_DATASET_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$")
 _RESERVED_ENV = frozenset({
     "JAX_PLATFORMS", "DATA_ROOT", "OUTPUT_DIR", "HOME", "PATH", "PYTHONPATH",
     "PYTHONUNBUFFERED", "TQDM_MININTERVAL",
@@ -175,12 +176,23 @@ class Core:
         dataset = spec.get("dataset", "default")
         if dataset in (None, "", "none"):
             dataset = ""
+            dataset_uri = ""
         elif dataset == "default":
             dataset = self.settings.default_dataset
-        elif dataset not in self.settings.datasets:
+            dataset_uri = self.settings.datasets.get(dataset, "") if dataset else ""
+            if dataset and not dataset_uri and self.settings.tartan_bucket:
+                dataset_uri = f"{self.settings.tartan_mount_path.rstrip('/')}/datasets/{dataset}"
+        elif dataset in self.settings.datasets:
+            dataset_uri = self.settings.datasets[dataset]
+        elif (
+            isinstance(dataset, str)
+            and self.settings.tartan_bucket
+            and _DATASET_NAME_RE.match(dataset)
+        ):
+            dataset_uri = f"{self.settings.tartan_mount_path.rstrip('/')}/datasets/{dataset}"
+        else:
             known = ", ".join(sorted(self.settings.datasets)) or "none"
             raise ApiError(400, f"Unknown dataset {dataset!r}. Available: {known}.")
-        dataset_uri = self.settings.datasets.get(dataset, "") if dataset else ""
 
         resume_from = spec.get("resume_from") or ""
         if resume_from:

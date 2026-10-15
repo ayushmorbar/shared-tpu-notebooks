@@ -62,9 +62,13 @@ echo "Empty output under all three headings means you are clean."
 echo
 # Deliberately not deleted: they hold students' checkpoints and the course datasets,
 # and a cluster rebuild reuses them. They bill for storage until removed by hand.
-for B in "${STUDENT_BUCKET}" "${DATASET_BUCKET}"; do
-  if gcloud storage buckets describe "gs://${B}" --project="${PROJECT}" >/dev/null 2>&1; then
-    echo "--- kept: gs://${B} (storage still bills; delete with: gcloud storage rm -r gs://${B}) ---"
-    gcloud storage du -s "gs://${B}" 2>/dev/null || true
+SEEN_BUCKETS=""
+for B in "${TARTAN_BUCKET}" "${STUDENT_BUCKET}" "${DATASET_BUCKET}"; do
+  if [[ -n "${B}" && " ${SEEN_BUCKETS} " != *" ${B} "* ]]; then
+    SEEN_BUCKETS="${SEEN_BUCKETS} ${B}"
+    if gcloud storage buckets describe "gs://${B}" --project="${PROJECT}" >/dev/null 2>&1; then
+      echo "--- kept: gs://${B} (storage still bills; delete with: gcloud storage rm -r gs://${B}) ---"
+      gcloud storage du -s "gs://${B}" 2>/dev/null || true
+    fi
   fi
 done

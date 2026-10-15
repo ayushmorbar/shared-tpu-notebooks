@@ -38,6 +38,16 @@ def test_default_dataset_is_resolved(core, cluster, make_snapshot):
     assert job["dataset"] == "hw3p2"
 
 
+def test_tartan_dataset_fallback(core, cluster, make_snapshot, settings):
+    from dataclasses import replace
+
+    core.settings = replace(settings, tartan_bucket="cmu-idl-ocean", tartan_mount_path="/tartan/11785")
+    job = submit(core, make_snapshot, dataset="hw2p2")
+    env = {e["name"]: e["value"] for e in cluster.jobs[job["name"]]["spec"]["template"]["spec"]["containers"][0]["env"]}
+    assert env["TPU_DATASET_URI"] == "/tartan/11785/datasets/hw2p2"
+    assert job["dataset"] == "hw2p2"
+
+
 @pytest.mark.parametrize("spec, message", [
     ({"script": "../train.py"}, "relative path"),
     ({"script": "/abs/train.py"}, "relative path"),

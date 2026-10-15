@@ -89,3 +89,30 @@ def test_submit_without_service_url_explains(homework, monkeypatch):
     monkeypatch.setattr(submit_tpu, "SERVICE_URL", "")
     with pytest.raises(submit_tpu.SubmitError, match="TPU_SUBMIT_URL"):
         submit_tpu.submit(str(homework / "train.py"))
+
+
+def test_discover_credentials_from_dotenv_and_kaggle(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for k in submit_tpu._CREDENTIAL_KEYS:
+        monkeypatch.delenv(k, raising=False)
+
+    (tmp_path / ".env").write_text(
+        "# Student keys\n"
+        "WANDB_API_KEY=wandb_from_dotenv\n"
+        "export HF_TOKEN='hf_from_dotenv'\n"
+        "IGNORED_KEY=should_not_be_auto_loaded\n"
+    )
+    kaggle_dir = tmp_path / ".kaggle"
+    kaggle_dir.mkdir()
+    (kaggle_dir / "kaggle.json").write_text('{"username": "andrew_student", "key": "kg_secret"}')
+
+    creds = submit_tpu._discover_credentials({"WANDB_API_KEY": "explicit_override", "CUSTOM": "1"})
+    assert creds["WANDB_API_KEY"] == "explicit_override"
+    assert creds["HF_TOKEN"] == "hf_from_dotenv"
+    assert creds["KAGGLE_USERNAME"] == "andrew_student"
+    assert creds["KAGGLE_KEY"] == "kg_secret"
+    assert creds["KAGGLE_API_TOKEN"] == "kg_secret"
+    assert creds["CUSTOM"] == "1"
+    assert "IGNORED_KEY" not in creds
+

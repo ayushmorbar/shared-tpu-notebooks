@@ -1,14 +1,15 @@
-# The TPU submission service. Applied by scripts/03_deploy_hub.sh, which fills in the
-# __PLACEHOLDERS__ from config.env.
+# The TPU submission service and Tartan storage identities. Applied by
+# scripts/03_deploy_hub.sh, which fills in the __PLACEHOLDERS__ from config.env.
 #
-# This is the only thing in the namespace that can create Jobs. Students talk to it with
-# their JupyterHub token; it builds every Job from one fixed template (see
+# tpu-submit is the only pod in the namespace that can create Jobs. Students talk to it
+# with their JupyterHub token; it builds every Job from one fixed template (see
 # services/tpu-submit/tpu_submit/jobspec.py). Students have no Kubernetes RBAC at all.
 #
-# Two Kubernetes service accounts, two Google identities, both via Workload Identity
-# principal bindings made by scripts/12_setup_storage.sh:
-#   tpu-submit  read/write on the student bucket (snapshots, logs, checkpoints)
-#   tpu-job     read-only on the dataset bucket; what student code runs as on the chip
+# Four Kubernetes service accounts, bound via Workload Identity in scripts/12_setup_storage.sh:
+#   tpu-submit    objectAdmin on STUDENT_BUCKET, objectViewer on TARTAN_BUCKET
+#   tpu-job       objectViewer on TARTAN_BUCKET & DATASET_BUCKET; runs student code on TPU
+#   student       objectViewer on TARTAN_BUCKET (read-only /tartan/11785 mount in notebooks)
+#   tartan-admin  objectAdmin on TARTAN_BUCKET (staff/admin pods and make shared-env)
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -21,6 +22,19 @@ metadata:
   name: tpu-job
   namespace: __NAMESPACE__
 automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: student
+  namespace: __NAMESPACE__
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tartan-admin
+  namespace: __NAMESPACE__
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -56,6 +70,60 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: tpu-submit
+    namespace: __NAMESPACE__
+---
+# Allows staff running hub_admin.py inside the Admin Workstation profile (or via kubectl)
+# to inspect/expand student PVCs and update the cmu-user-overrides ConfigMap.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tartan-admin
+  namespace: __NAMESPACE__
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tartan-admin
+  namespace: __NAMESPACE__
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: tartan-admin
+subjects:
+  - kind: ServiceAccount
+    name: tartan-admin
+    namespace: __NAMESPACE__
+---
+# Allows JupyterHub's unified_pre_spawn_hook to read the cmu-user-overrides ConfigMap.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: hub-configmap-reader
+  namespace: __NAMESPACE__
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: hub-configmap-reader
+  namespace: __NAMESPACE__
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: hub-configmap-reader
+subjects:
+  - kind: ServiceAccount
+    name: hub
     namespace: __NAMESPACE__
 ---
 apiVersion: apps/v1
@@ -108,6 +176,10 @@ spec:
               value: __TPU_JOB_IMAGE__
             - name: STUDENT_BUCKET
               value: __STUDENT_BUCKET__
+            - name: TARTAN_BUCKET
+              value: "__TARTAN_BUCKET__"
+            - name: SHARED_ENV_NAME
+              value: "__SHARED_ENV_NAME__"
             - name: DATASETS
               value: "__DATASETS__"
             - name: DEFAULT_DATASET

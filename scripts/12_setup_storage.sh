@@ -1,28 +1,30 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: 12_setup_storage.sh
-# Description: Buckets and identities for the TPU submission service.
+# Description: Buckets and Workload Identity permissions for Tartan shared
+#              storage and the TPU submission service.
 #
-# Two buckets, two Kubernetes service accounts, no Google service accounts and no keys:
+# Buckets:
+#   TARTAN_BUCKET   Shared course drive mounted at /tartan/11785 and /ocean
+#                   (datasets, shared Python environments, assignments).
+#                   Read-only for students and TPU jobs; read-write for staff.
+#   STUDENT_BUCKET  Snapshots, job logs, checkpoints, results. Read/write for
+#                   the tpu-submit service only. Students never touch it
+#                   directly; they go through the service, which keeps each
+#                   student in their own users/<name>/ folder.
+#   DATASET_BUCKET  Dataset .tar archives (defaults to TARTAN_BUCKET).
 #
-#   STUDENT_BUCKET  snapshots, job logs, checkpoints, results. Read/write for the
-#                   tpu-submit service only. Students never touch it directly; they
-#                   go through the service, which keeps each student in their own
-#                   users/<name>/ folder.
-#   DATASET_BUCKET  one archive per assignment. Read-only for tpu-job, the account
-#                   student code runs as on the chip. The data is the same for
-#                   everyone, so one shared read-only identity is fine.
-#
-# Permissions are granted to the Kubernetes service accounts directly through Workload
-# Identity Federation ("principal://.../subject/ns/NS/sa/NAME"), so no Google service
-# account has to be created, annotated, or kept in sync. Autopilot clusters always have
-# Workload Identity on.
+# Kubernetes ServiceAccounts bound via Workload Identity Federation:
+#   tpu-submit      objectAdmin on STUDENT_BUCKET, objectViewer on TARTAN_BUCKET
+#   tpu-job         objectViewer on TARTAN_BUCKET & DATASET_BUCKET (runs on TPU)
+#   student         objectViewer on TARTAN_BUCKET (mounts /tartan/11785 read-only)
+#   tartan-admin    objectAdmin on TARTAN_BUCKET (staff pods & make shared-env)
 #
 # Usage:
 #   make storage                                          buckets + bindings
 #   bash scripts/12_setup_storage.sh upload hw3p2 ~/hw3p2_data
-#       tar a dataset folder (or copy a .tar) to gs://DATASET_BUCKET/hw3p2.tar and print
-#       the DATASETS line for config.env
+#       tar a dataset folder (or copy a .tar) to gs://DATASET_BUCKET/datasets/hw3p2.tar
+#       and print the DATASETS line for config.env
 # ==============================================================================
 
 source "$(dirname "$0")/common.sh"
@@ -55,11 +57,14 @@ ensure_bucket() {
 }
 
 setup() {
-  log_header "Storage for the TPU submission service"
+  log_header "Storage for Tartan shared drive and the TPU submission service"
   gcloud services enable storage.googleapis.com --project="${PROJECT}" >/dev/null
 
+  ensure_bucket "${TARTAN_BUCKET}"
   ensure_bucket "${STUDENT_BUCKET}"
-  ensure_bucket "${DATASET_BUCKET}"
+  if [[ "${DATASET_BUCKET}" != "${TARTAN_BUCKET}" ]]; then
+    ensure_bucket "${DATASET_BUCKET}"
+  fi
 
   # Jobs overwrite their checkpoint every epoch. With the default 7-day soft delete,
   # every overwritten copy keeps billing for a week, which for a class of 300 is
@@ -73,20 +78,32 @@ setup() {
 EOF
   gcloud storage buckets update "gs://${STUDENT_BUCKET}" --lifecycle-file="${LIFECYCLE}" >/dev/null
 
-  log_info "tpu-submit -> objectAdmin on gs://${STUDENT_BUCKET}"
+  log_info "tpu-submit -> objectAdmin on gs://${STUDENT_BUCKET}, objectViewer on gs://${TARTAN_BUCKET}"
   gcloud storage buckets add-iam-policy-binding "gs://${STUDENT_BUCKET}" \
     --member="$(principal tpu-submit)" --role=roles/storage.objectAdmin >/dev/null
+  gcloud storage buckets add-iam-policy-binding "gs://${TARTAN_BUCKET}" \
+    --member="$(principal tpu-submit)" --role=roles/storage.objectViewer >/dev/null
 
-  log_info "tpu-job -> objectViewer on gs://${DATASET_BUCKET}"
-  gcloud storage buckets add-iam-policy-binding "gs://${DATASET_BUCKET}" \
-    --member="$(principal tpu-job)" --role=roles/storage.objectViewer >/dev/null
+  log_info "student & tpu-job -> objectViewer (read-only) on gs://${TARTAN_BUCKET}"
+  for ksa in student tpu-job; do
+    gcloud storage buckets add-iam-policy-binding "gs://${TARTAN_BUCKET}" \
+      --member="$(principal "${ksa}")" --role=roles/storage.objectViewer >/dev/null
+    if [[ "${DATASET_BUCKET}" != "${TARTAN_BUCKET}" ]]; then
+      gcloud storage buckets add-iam-policy-binding "gs://${DATASET_BUCKET}" \
+        --member="$(principal "${ksa}")" --role=roles/storage.objectViewer >/dev/null
+    fi
+  done
 
-  log_success "buckets and bindings ready"
+  log_info "tartan-admin (staff & make shared-env) -> objectAdmin on gs://${TARTAN_BUCKET}"
+  gcloud storage buckets add-iam-policy-binding "gs://${TARTAN_BUCKET}" \
+    --member="$(principal tartan-admin)" --role=roles/storage.objectAdmin >/dev/null
+
+  log_success "buckets and Workload Identity bindings ready"
   echo
   echo "IAM changes can take a few minutes to reach the GKE metadata server."
   if [[ -z "${DATASETS}" ]]; then
     echo
-    log_warn "DATASETS is empty, so jobs get no data. Upload an archive with:"
+    log_warn "DATASETS is empty. Upload a dataset archive with:"
     echo "    bash scripts/12_setup_storage.sh upload hw3p2 /path/to/hw3p2_data"
   fi
 }
@@ -105,14 +122,14 @@ upload() {
   if [[ -d "${src}" ]]; then
     # Uncompressed: filterbank .npy files barely compress, and gzip would make the
     # download on the chip CPU-bound. The job unpacks the archive as it streams in.
-    dest="gs://${DATASET_BUCKET}/${name}.tar"
+    dest="gs://${DATASET_BUCKET}/datasets/${name}.tar"
     log_header "Uploading ${src} as ${dest}"
     log_info "the job sets DATA_ROOT to the archive's single top-level folder, here $(basename "${src}")/"
     tar -C "$(dirname "${src}")" -cf - "$(basename "${src}")" | gcloud storage cp - "${dest}"
   elif [[ -f "${src}" ]]; then
     case "${src}" in
-      *.tar) dest="gs://${DATASET_BUCKET}/${name}.tar" ;;
-      *.tar.gz|*.tgz) dest="gs://${DATASET_BUCKET}/${name}.tar.gz" ;;
+      *.tar) dest="gs://${DATASET_BUCKET}/datasets/${name}.tar" ;;
+      *.tar.gz|*.tgz) dest="gs://${DATASET_BUCKET}/datasets/${name}.tar.gz" ;;
       *) log_error "expected a folder, .tar, or .tar.gz"; exit 1 ;;
     esac
     log_header "Uploading ${src} as ${dest}"

@@ -241,3 +241,38 @@ def test_cancel_from_client(client, homework):
     assert job.info["name"] not in client["cluster"].jobs
     jobs = submit_tpu.status()
     assert jobs[0]["state"] == "cancelled"
+
+
+def test_local_tartan_dataset_dir_and_tar(client, homework, tmp_path):
+    (homework / "check_data.py").write_text(
+        "import os, pathlib\n"
+        "root = pathlib.Path(os.environ['DATA_ROOT'])\n"
+        "print('DATA_ROOT_FILE:', (root / 'sample.txt').read_text().strip())\n"
+    )
+    # 1. Directory on /tartan/11785/datasets/<name>
+    ds_dir = tmp_path / "tartan" / "datasets" / "hw2p2"
+    ds_dir.mkdir(parents=True)
+    (ds_dir / "sample.txt").write_text("from_tartan_dir")
+
+    job = submit_tpu.submit(str(homework / "check_data.py"), dataset=None)
+    client["cluster"].admit(job.info["name"])
+    proc = run_wrapper(client, job.info, tmp_path / "work_dir", extra={"TPU_DATASET_URI": str(ds_dir)})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "DATA_ROOT_FILE: from_tartan_dir" in proc.stdout
+
+    # 2. Tarball on /tartan/11785/datasets/<name>.tar unpacked to local scratch DATA_ROOT
+    import tarfile
+    tar_src = tmp_path / "src_tar" / "hw3p2_data"
+    tar_src.mkdir(parents=True)
+    (tar_src / "sample.txt").write_text("from_tartan_tar")
+    tar_path = tmp_path / "tartan" / "datasets" / "hw3p2.tar"
+    with tarfile.open(tar_path, "w") as t:
+        t.add(tar_src, arcname="hw3p2_data")
+
+    proc2 = run_wrapper(
+        client, job.info, tmp_path / "work_tar",
+        extra={"TPU_DATASET_URI": str(tmp_path / "tartan" / "datasets" / "hw3p2")},
+    )
+    assert proc2.returncode == 0, proc2.stdout + proc2.stderr
+    assert "DATA_ROOT_FILE: from_tartan_tar" in proc2.stdout
+

@@ -280,11 +280,33 @@ def restore_log(svc: Service) -> None:
             return
 
 
+def _unpack_local_tar(archive: Path, console: Console) -> Path:
+    console.say(f"unpacking dataset {archive} ({archive.stat().st_size / 2**30:.2f} GB) to local disk")
+    t0 = time.time()
+    DATA.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive, mode="r:*") as tar:
+        _extract(tar, DATA)
+    entries = [p for p in DATA.iterdir() if not p.name.startswith(".")]
+    root = entries[0] if len(entries) == 1 and entries[0].is_dir() else DATA
+    console.say(f"dataset ready at {root} in {time.time() - t0:.0f}s")
+    return root
+
+
 def fetch_dataset(console: Console) -> Path | None:
     if not DATASET_URI:
         return None
+    if DATASET_URI.startswith("/"):
+        p = Path(DATASET_URI)
+        for ext in (".tar", ".tar.gz", ".tgz"):
+            cand = Path(str(p) + ext) if not str(p).endswith(ext) else p
+            if cand.is_file():
+                return _unpack_local_tar(cand, console)
+        if p.is_dir():
+            console.say(f"dataset directory ready at {p}")
+            return p
+        raise RuntimeError(f"dataset path {DATASET_URI} does not exist")
     if not DATASET_URI.startswith("gs://"):
-        raise RuntimeError(f"dataset URI must be gs://..., got {DATASET_URI!r}")
+        raise RuntimeError(f"dataset URI must be gs://... or an absolute path, got {DATASET_URI!r}")
     from google.cloud import storage
 
     bucket_name, _, blob_name = DATASET_URI[len("gs://"):].partition("/")
@@ -365,6 +387,7 @@ def child_env(data_root: Path | None, resumed: bool) -> dict:
     })
     if data_root is not None:
         env["DATA_ROOT"] = str(data_root)
+        env.setdefault("DATA_URI", str(data_root))
     return env
 
 

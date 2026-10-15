@@ -43,15 +43,39 @@ TPU_ACCELERATOR="${TPU_ACCELERATOR:-tpu-v5-lite-podslice}"
 TPU_TOPOLOGY="${TPU_TOPOLOGY:-1x1}"
 TPU_IMAGE="${TPU_IMAGE:-us-docker.pkg.dev/cloud-tpu-images/jax-ai-image/tpu:latest}"
 
-# Images built by 01_build_image.sh.
+# Central Tartan course storage (mounted at /tartan/11785 and /ocean)
+TARTAN_BUCKET="${TARTAN_BUCKET:-${OCEAN_BUCKET:-${PROJECT}-tartan}}"
+TARTAN_URI="${TARTAN_URI:-gs://${TARTAN_BUCKET}}"
+TARTAN_MOUNT_PATH="${TARTAN_MOUNT_PATH:-/tartan/11785}"
+
+# Aliases for backward compatibility
+OCEAN_BUCKET="${TARTAN_BUCKET}"
+OCEAN_URI="${TARTAN_URI}"
+
+DATA_URI="${DATA_URI:-gs://${TARTAN_BUCKET}/datasets}"
+CKPT_ROOT="${CKPT_ROOT:-gs://${TARTAN_BUCKET}/checkpoints}"
+SUBMISSION_ROOT="${SUBMISSION_ROOT:-gs://${TARTAN_BUCKET}/submissions}"
+SECRET_NAME="${SECRET_NAME:-course-secrets}"
+
+# Zero-rebuild shared Python environment on Tartan storage
+SINGLEUSER_IMAGE="${SINGLEUSER_IMAGE:-quay.io/jupyter/scipy-notebook}"
+SINGLEUSER_IMAGE_TAG="${SINGLEUSER_IMAGE_TAG:-2024-11-11}"
+SHARED_ENV_NAME="${SHARED_ENV_NAME:-idlf26jax}"
+REQUIREMENTS_FILE="${REQUIREMENTS_FILE:-requirements.txt}"
+SHARED_ENV_DIR="${SHARED_ENV_DIR:-${TARTAN_MOUNT_PATH}/envs/${SHARED_ENV_NAME}}"
+ENV_BUILDER_CPU="${ENV_BUILDER_CPU:-2}"
+ENV_BUILDER_MEMORY="${ENV_BUILDER_MEMORY:-8Gi}"
+ENV_BUILDER_STORAGE="${ENV_BUILDER_STORAGE:-5Gi}"
+
+# Images built by 01_build_image.sh (tpu-job and tpu-submit).
 COURSE_REGISTRY="${COURSE_REGISTRY:-${REGION}-docker.pkg.dev/${PROJECT}/course-images}"
-NOTEBOOK_IMAGE="${NOTEBOOK_IMAGE:-${COURSE_REGISTRY}/scipy-notebook:latest}"
+NOTEBOOK_IMAGE="${NOTEBOOK_IMAGE:-${SINGLEUSER_IMAGE}:${SINGLEUSER_IMAGE_TAG}}"
 TPU_JOB_IMAGE="${TPU_JOB_IMAGE:-${COURSE_REGISTRY}/tpu-job:latest}"
 SUBMIT_IMAGE="${SUBMIT_IMAGE:-${COURSE_REGISTRY}/tpu-submit:latest}"
 
 # TPU submission service and its storage (12_setup_storage.sh, 03_deploy_hub.sh).
 STUDENT_BUCKET="${STUDENT_BUCKET:-${PROJECT}-tpu-runs}"
-DATASET_BUCKET="${DATASET_BUCKET:-${PROJECT}-course-data}"
+DATASET_BUCKET="${DATASET_BUCKET:-${TARTAN_BUCKET}}"
 DATASETS="${DATASETS:-}"
 DEFAULT_DATASET="${DEFAULT_DATASET:-}"
 MAX_JOB_HOURS="${MAX_JOB_HOURS:-8}"
@@ -63,6 +87,7 @@ DOMAIN="${DOMAIN:-}"
 STUDENT_GROUP="${STUDENT_GROUP:-}"
 TA_GROUP="${TA_GROUP:-}"
 ADMIN_USERS="${ADMIN_USERS:-}"
+CULL_ADMIN_USERS="${CULL_ADMIN_USERS:-false}"
 TEST_ACCOUNTS="${TEST_ACCOUNTS:-}"
 
 # GKE Cluster Context Identifier

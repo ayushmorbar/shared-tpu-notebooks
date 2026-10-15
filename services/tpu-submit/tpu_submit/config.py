@@ -29,6 +29,10 @@ class Settings:
     student_bucket: str = ""
     # Filesystem store instead of GCS. For local development and tests only.
     store_dir: str = ""
+    # Shared Tartan bucket mounted read-only at tartan_mount_path (/tartan/11785) and /ocean.
+    tartan_bucket: str = ""
+    tartan_mount_path: str = "/tartan/11785"
+    shared_env_name: str = "idlf26jax"
     hub_api_url: str = "http://hub:8081/hub/api"
     service_name: str = "tpu-submit"
     require_access_scope: bool = True
@@ -70,6 +74,9 @@ class Settings:
             job_image=get("TPU_JOB_IMAGE"),
             student_bucket=get("STUDENT_BUCKET"),
             store_dir=get("STORE_DIR"),
+            tartan_bucket=get("TARTAN_BUCKET", get("OCEAN_BUCKET")),
+            tartan_mount_path=get("TARTAN_MOUNT_PATH", "/tartan/11785") or "/tartan/11785",
+            shared_env_name=get("SHARED_ENV_NAME", "idlf26jax") or "idlf26jax",
             hub_api_url=get("HUB_API_URL", "http://hub:8081/hub/api").rstrip("/"),
             service_name=get("SERVICE_NAME", "tpu-submit"),
             require_access_scope=get("REQUIRE_ACCESS_SCOPE", "true").lower() in ("1", "true", "yes"),
@@ -96,7 +103,11 @@ class Settings:
             raise ValueError("TPU_JOB_IMAGE is required")
         if not settings.student_bucket and not settings.store_dir:
             raise ValueError("STUDENT_BUCKET is required")
-        if settings.default_dataset and settings.default_dataset not in settings.datasets:
+        if (
+            settings.default_dataset
+            and settings.default_dataset not in settings.datasets
+            and not settings.tartan_bucket
+        ):
             raise ValueError(
                 f"DEFAULT_DATASET {settings.default_dataset!r} is not one of DATASETS "
                 f"({', '.join(settings.datasets) or 'none configured'})"

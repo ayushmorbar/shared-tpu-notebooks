@@ -3,12 +3,12 @@
 Your notebook has no accelerator. submit() packs the folder your script lives in, sends
 it to the course's TPU submission service, and the service queues a job on the shared
 v5e pool. When a chip is free the job unpacks your folder and the dataset on the chip's
-machine, runs your script, and keeps uploading its log and expts/ folder (checkpoints,
-results.csv) so you can watch it and download the results here.
+machine (or mounts /tartan/11785 read-only), runs your script, and keeps uploading its
+log and expts/ folder (checkpoints, results.csv) so you can watch it and download the
+results here.
 
     import submit_tpu
-    job = submit_tpu.submit("train.py", args=["--config", "config.yaml"],
-                            env={"WANDB_API_KEY": WANDB_API_KEY})
+    job = submit_tpu.submit("train.py", args=["--config", "config.yaml"])
     submit_tpu.watch(job)    # live log; stopping this cell does NOT stop the job
     submit_tpu.status()      # your jobs, and your place in line
     submit_tpu.pull(job)     # copy expts/ and job.log into ./tpu_runs/<job id>/
@@ -19,15 +19,15 @@ time. A job pushed off its chip by the cluster restarts on its own and resumes f
 last checkpoint it uploaded. To continue a finished or failed run, submit again with
 resume_from=<old job>.
 
-What gets sent: every file under the script's folder except notebooks (*.ipynb, which
-often hold pasted keys), credentials (kaggle.json, .env, .netrc, keys), caches, data
-folders, and earlier outputs (expts/, checkpoints/, wandb/, tpu_runs/). Keys you pass in
-env= go to the job as environment variables; they are never stored in the snapshot.
+Credentials in /home/jovyan/.env (WANDB_API_KEY, KAGGLE_API_TOKEN, HF_TOKEN, etc.) or
+~/.kaggle/kaggle.json are automatically forwarded to your TPU job as environment
+variables via a per-job Kubernetes Secret—never bundled into the uploaded code archive.
 """
 
 from __future__ import annotations
 
 import fnmatch
+import json
 import os
 import sys
 import tarfile
@@ -55,6 +55,17 @@ EXCLUDE_FILES = (
     "*.pyc", ".DS_Store", "*.tar.gz.part",
 )
 
+_CREDENTIAL_KEYS = (
+    "WANDB_API_KEY",
+    "WANDB_PROJECT",
+    "WANDB_ENTITY",
+    "KAGGLE_USERNAME",
+    "KAGGLE_KEY",
+    "KAGGLE_API_TOKEN",
+    "HF_TOKEN",
+    "HUGGING_FACE_HUB_TOKEN",
+)
+
 
 class SubmitError(RuntimeError):
     """The service refused the request. The message says why."""
@@ -70,6 +81,89 @@ class Job:
 
     def __repr__(self) -> str:
         return f"Job({self.id!r}, state={self.info.get('state')!r})"
+
+
+# ----------------------------------------------------------------- credentials
+
+def _load_dotenv_file(path: Path) -> dict[str, str]:
+    """Parse KEY=VALUE pairs from a .env file, skipping comments and empty values."""
+    out: dict[str, str] = {}
+    if not path.is_file():
+        return out
+    try:
+        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):].strip()
+            key, _, val = line.partition("=")
+            key = key.strip()
+            val = val.strip().strip('"').strip("'")
+            if key and val:
+                out[key] = val
+    except OSError:
+        pass
+    return out
+
+
+def _discover_credentials(extra_env: dict | None = None) -> dict[str, str]:
+    """Auto-discover student API keys from .env files, ~/.kaggle/kaggle.json, and os.environ.
+
+    Precedence (highest wins):
+      1. Explicit `extra_env` passed to submit(env=...)
+      2. Current notebook process environment (os.environ)
+      3. Local .env files (/home/jovyan/.env, ~/.env, ./.env)
+      4. ~/.kaggle/kaggle.json
+    """
+    creds: dict[str, str] = {}
+
+    # 4. ~/.kaggle/kaggle.json
+    for kaggle_path in (Path("/home/jovyan/.kaggle/kaggle.json"), Path.home() / ".kaggle" / "kaggle.json"):
+        if kaggle_path.is_file():
+            try:
+                kdata = json.loads(kaggle_path.read_text(encoding="utf-8"))
+                if kdata.get("username"):
+                    creds["KAGGLE_USERNAME"] = str(kdata["username"])
+                if kdata.get("key"):
+                    creds["KAGGLE_KEY"] = str(kdata["key"])
+                    creds.setdefault("KAGGLE_API_TOKEN", str(kdata["key"]))
+            except Exception:
+                pass
+            break
+
+    # 3. .env files
+    seen_paths: set[Path] = set()
+    for env_path in (Path("/home/jovyan/.env"), Path.home() / ".env", Path(".env")):
+        try:
+            resolved = env_path.resolve()
+        except OSError:
+            continue
+        if resolved in seen_paths:
+            continue
+        seen_paths.add(resolved)
+        for k, v in _load_dotenv_file(resolved).items():
+            if k in _CREDENTIAL_KEYS and v:
+                creds[k] = v
+
+    # 2. Process environment variables
+    for k in _CREDENTIAL_KEYS:
+        val = os.environ.get(k, "").strip()
+        if val:
+            creds[k] = val
+
+    # Ensure KAGGLE_KEY and KAGGLE_API_TOKEN mirror each other if only one is set
+    if "KAGGLE_API_TOKEN" in creds and "KAGGLE_KEY" not in creds:
+        creds["KAGGLE_KEY"] = creds["KAGGLE_API_TOKEN"]
+    elif "KAGGLE_KEY" in creds and "KAGGLE_API_TOKEN" not in creds:
+        creds["KAGGLE_API_TOKEN"] = creds["KAGGLE_KEY"]
+
+    # 1. Explicit env overrides
+    if extra_env:
+        for k, v in extra_env.items():
+            creds[str(k)] = str(v)
+
+    return creds
 
 
 # --------------------------------------------------------------------------- HTTP
@@ -191,6 +285,7 @@ def submit(
     script       path to the .py file, relative to the current folder or absolute
     args         command-line arguments for the script
     env          extra environment variables, e.g. {"WANDB_API_KEY": key}
+                 (keys in /home/jovyan/.env or ~/.kaggle/kaggle.json are auto-discovered)
     dataset      which course dataset to unpack on the chip ("default", a name, or None)
     resume_from  an earlier job whose expts/ folder this job starts from
     root         folder to send; defaults to the script's folder
@@ -207,10 +302,11 @@ def submit(
     if _excluded(Path(rel_script), False):
         raise SubmitError(f"{rel_script} matches an excluded pattern and would not be sent.")
 
+    merged_env = _discover_credentials(env)
     spec = {
         "script": rel_script,
         "args": [str(a) for a in args],
-        "env": {str(k): str(v) for k, v in (env or {}).items()},
+        "env": merged_env,
         "dataset": dataset,
         "resume_from": _job_id(resume_from) if resume_from else None,
     }
@@ -350,7 +446,73 @@ def pull(job=None, dest: str | os.PathLike | None = None, pattern: str = "*") ->
     return dest
 
 
+# ---------------------------------------------------- backward-compatible shims
+
+def run(
+    code: str,
+    timeout: int = 28800,
+    keep: bool = False,
+    env: dict | None = None,
+    dataset: str | None = None,
+) -> str:
+    """Run a self-contained Python snippet on a TPU chip and return its console output.
+
+    Provided for quick experiments and backward compatibility with earlier notebooks.
+    For multi-file projects and checkpointing, prefer `submit_tpu.submit("train.py")`.
+    """
+    del timeout, keep  # Deadline and TTL are enforced server-side by tpu-submit
+    with tempfile.TemporaryDirectory() as tmp:
+        script_file = Path(tmp) / "snippet.py"
+        script_file.write_text(code, encoding="utf-8")
+        job = submit(str(script_file), env=env, dataset=dataset, root=tmp, follow=True)
+    info = status(job)
+    out = logs(job)
+    if info.get("state") != "succeeded":
+        raise RuntimeError(f"TPU job {job.id} ended in state {info.get('state')!r}:\n{out}")
+    return out
+
+
+def train(
+    script: str,
+    assignment: str | None = None,
+    dataset: str | None = None,
+    extra_env: dict[str, str] | None = None,
+    args=(),
+    resume_from=None,
+    timeout: int = 28800,
+    keep: bool = False,
+) -> str:
+    """Submit a training script file (or inline code string), stream logs, and pull results.
+
+    Compatible with Tartan HW2/HW0 notebooks (`submit_tpu.train("train.py", assignment="hw2p2")`).
+    """
+    del timeout, keep
+    chosen_dataset = dataset if dataset is not None else (assignment or "default")
+    cand = Path(script).expanduser()
+    if "\n" not in script and cand.is_file():
+        job = submit(
+            str(cand),
+            args=args,
+            env=extra_env,
+            dataset=chosen_dataset,
+            resume_from=resume_from,
+            follow=True,
+        )
+    else:
+        return run(script, env=extra_env, dataset=chosen_dataset)
+
+    info = status(job)
+    out = logs(job)
+    try:
+        pull(job)
+    except Exception:
+        pass
+    if info.get("state") != "succeeded":
+        raise RuntimeError(f"TPU job {job.id} ended in state {info.get('state')!r}:\n{out}")
+    return out
+
+
 __all__ = [
     "Job", "SubmitError", "submit", "watch", "status", "jobs", "usage", "cancel",
-    "logs", "files", "pull", "collect_files", "pack",
+    "logs", "files", "pull", "collect_files", "pack", "run", "train",
 ]

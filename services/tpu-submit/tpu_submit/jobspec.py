@@ -1,8 +1,9 @@
 """The one Job template every student run uses.
 
 Nothing in here comes from the student except the script path, its arguments, the
-dataset name (looked up in the host's list), and env values, which go into a Secret.
-Queue label, chip count, image, priority, deadline, and service account are fixed.
+dataset name (looked up in the host's list or Tartan store), and env values, which go
+into a Secret. Queue label, chip count, image, priority, deadline, and service account
+are fixed.
 
 Shape notes forced by GKE, same as k8s/student-tpu-job.yaml:
   * One pod per TPU node, and the pod takes every chip on it. ct5lp-hightpu-1t has one.
@@ -22,6 +23,12 @@ from .config import Settings
 
 CONTAINER = "job"
 WORK_DIR = "/work"
+TARTAN_GCSFUSE_MOUNT_OPTIONS = (
+    "implicit-dirs,file-cache:max-size-mb:0,"
+    "metadata-cache:stat-cache-max-size-mb:2048,"
+    "metadata-cache:ttl-secs:60,uid=1000,gid=1000,"
+    "dir-mode=0777,file-mode=0777,ro"
+)
 
 
 def build_job(
@@ -54,6 +61,33 @@ def build_job(
         # Hour-long progress bars otherwise write a line every 0.1 s.
         {"name": "TQDM_MININTERVAL", "value": "30"},
     ]
+    volume_mounts = [{"name": "work", "mountPath": WORK_DIR}]
+    volumes: list[dict] = [{"name": "work", "emptyDir": {"sizeLimit": settings.job_disk}}]
+    template_metadata: dict = {"labels": labels}
+
+    if settings.tartan_bucket:
+        template_metadata["annotations"] = {"gke-gcsfuse/volumes": "true"}
+        env.extend([
+            {"name": "TARTAN_BUCKET", "value": settings.tartan_bucket},
+            {"name": "TARTAN_MOUNT_PATH", "value": settings.tartan_mount_path},
+            {"name": "SHARED_ENV_NAME", "value": settings.shared_env_name},
+        ])
+        volume_mounts.extend([
+            {"name": "course-tartan", "mountPath": settings.tartan_mount_path, "readOnly": True},
+            {"name": "course-tartan", "mountPath": "/ocean", "readOnly": True},
+        ])
+        volumes.append({
+            "name": "course-tartan",
+            "csi": {
+                "driver": "gcsfuse.csi.storage.gke.io",
+                "readOnly": True,
+                "volumeAttributes": {
+                    "bucketName": settings.tartan_bucket,
+                    "mountOptions": TARTAN_GCSFUSE_MOUNT_OPTIONS,
+                },
+            },
+        })
+
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -93,7 +127,7 @@ def build_job(
                 ]
             },
             "template": {
-                "metadata": {"labels": labels},
+                "metadata": template_metadata,
                 "spec": {
                     "restartPolicy": "Never",
                     "priorityClassName": settings.priority_class,
@@ -112,7 +146,7 @@ def build_job(
                     "tolerations": [
                         {"key": "google.com/tpu", "operator": "Exists", "effect": "NoSchedule"}
                     ],
-                    "securityContext": {"fsGroup": 1000},
+                    "securityContext": {"fsGroup": 1000, "fsGroupChangePolicy": "OnRootMismatch"},
                     "containers": [
                         {
                             "name": CONTAINER,
@@ -138,10 +172,10 @@ def build_job(
                                 "allowPrivilegeEscalation": False,
                                 "capabilities": {"drop": ["ALL"]},
                             },
-                            "volumeMounts": [{"name": "work", "mountPath": WORK_DIR}],
+                            "volumeMounts": volume_mounts,
                         }
                     ],
-                    "volumes": [{"name": "work", "emptyDir": {"sizeLimit": settings.job_disk}}],
+                    "volumes": volumes,
                 },
             },
         },

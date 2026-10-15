@@ -11,7 +11,8 @@
 # the browser tab is open, whether the student is running code or reading the
 # assignment. For 300 students that is $405/hr, and most of them are typing.
 #
-# So students get a CPU notebook, and TPU work leaves the notebook as a queued Job.
+# So students get a CPU notebook with /tartan/11785 mounted read-only (shared Python
+# environments and datasets), and TPU work leaves the notebook as a queued Job.
 # notebooks/submit_tpu.py sends the student's script folder to the tpu-submit service
 # (k8s/tpu-submit.yaml), which is the only thing allowed to create Jobs. The chip is
 # held for as long as the job runs, not for as long as the notebook is open.
@@ -53,8 +54,8 @@ hub:
         - "users:activity!user"
         - "access:servers!server"
         - "access:services!service=tpu-submit"
-    # Notebooks get no Kubernetes credential. Students submit TPU work through the
-    # tpu-submit service, never to the Kubernetes API.
+    # Notebooks get no Kubernetes credential by default. Students submit TPU work through
+    # the tpu-submit service, never to the Kubernetes API.
     KubeSpawner:
       automount_service_account_token: false
   # Registers the TPU submission service by name so the scope above can refer to it.
@@ -79,10 +80,6 @@ hub:
   # the GFE. That is enforced by the firewall, which allows 130.211.0.0/22 and
   # 35.191.0.0/16 and nothing else. Expose this Service any other way and the header
   # becomes forgeable, so do not pair this authenticator with a plain LoadBalancer.
-  #
-  # For production, verify the signed JWT in X-Goog-IAP-JWT-Assertion rather than
-  # trusting the email header. The header is sufficient here because the only path in
-  # is the IAP-protected one.
   extraConfig:
     cmu-branding: |
       c.JupyterHub.template_vars = {
@@ -102,6 +99,107 @@ hub:
           'hub_title': 'CMU 11-785 Deep Learning Hub',
       }
       c.JupyterHub.admin_access = True
+    profile-visibility: |
+      # Make all profiles visible on the spawner page for JupyterHub admins
+      # (staff/instructors), while students see only profiles matching their groups.
+      async def dynamic_profile_form(spawner):
+          all_profiles = spawner.profile_list
+          if spawner.user.admin:
+              # Return a copy with allowed_groups/allowed_users stripped so KubeSpawner
+              # renders every option in the dropdown for admins.
+              unlocked = []
+              for p in all_profiles:
+                  p_copy = dict(p)
+                  p_copy.pop("allowed_groups", None)
+                  p_copy.pop("allowed_users", None)
+                  unlocked.append(p_copy)
+              return spawner._options_form_default_from_profile_list(unlocked)
+          return await spawner._default_options_form()
+
+      c.KubeSpawner.options_form = dynamic_profile_form
+    user-resource-overrides: |
+      # Unified pre_spawn_hook:
+      # 1. Dynamic Per-User Resource & Tier Overrides via ConfigMap 'cmu-user-overrides'
+      # 2. Tartan Storage Permission Enforcement (Read-Only for students, Read-Write for admins)
+      import copy
+      import json
+      import os
+      from kubernetes_asyncio import client, config
+
+      async def unified_pre_spawn_hook(spawner):
+          username = spawner.user.name
+          is_admin = spawner.user.admin
+          user_groups = {g.name for g in spawner.user.groups}
+          is_staff = is_admin or bool(user_groups.intersection({"staff", "admin"}))
+
+          # --- Part A: Dynamic Per-User Overrides from ConfigMap ---
+          ns = os.environ.get("POD_NAMESPACE", "cmu-idl")
+          try:
+              config.load_incluster_config()
+              async with client.ApiClient() as api:
+                  v1 = client.CoreV1Api(api)
+                  cm = await v1.read_namespaced_config_map("cmu-user-overrides", ns)
+                  overrides = json.loads((cm.data or {}).get("overrides.json", "{}"))
+                  u_cfg = overrides.get(username, {})
+                  if u_cfg:
+                      spawner.log.info(f"Applying custom resource override for {username}: {u_cfg}")
+                      if "cpu_limit" in u_cfg:
+                          spawner.cpu_limit = float(u_cfg["cpu_limit"])
+                      if "cpu_guarantee" in u_cfg:
+                          spawner.cpu_guarantee = float(u_cfg["cpu_guarantee"])
+                      if "mem_limit" in u_cfg:
+                          spawner.mem_limit = str(u_cfg["mem_limit"])
+                      if "mem_guarantee" in u_cfg:
+                          spawner.mem_guarantee = str(u_cfg["mem_guarantee"])
+          except Exception as e:
+              spawner.log.debug(f"No custom resource override applied for {username}: {e}")
+
+          # --- Part B: Tartan Storage Access Control ---
+          # Deep-copy volumes and volume_mounts so mutating mountOptions for an admin
+          # never leaks into subsequent student spawns.
+          spawner.volumes = copy.deepcopy(list(spawner.volumes))
+          spawner.volume_mounts = copy.deepcopy(list(spawner.volume_mounts))
+
+          for vol in spawner.volumes:
+              if vol.get("name") == "course-tartan" and "csi" in vol:
+                  attrs = vol["csi"].setdefault("volumeAttributes", {})
+                  opts = attrs.get("mountOptions", "")
+                  opt_list = [o for o in opts.split(",") if o and o != "ro"]
+                  if is_staff:
+                      attrs["mountOptions"] = ",".join(opt_list)
+                      vol["csi"]["readOnly"] = False
+                  else:
+                      opt_list.append("ro")
+                      attrs["mountOptions"] = ",".join(opt_list)
+                      vol["csi"]["readOnly"] = True
+
+          for vm in spawner.volume_mounts:
+              if vm.get("name") == "course-tartan":
+                  vm["readOnly"] = not is_staff
+
+          if is_staff:
+              # tartan-admin has Workload Identity objectAdmin on gs://TARTAN_BUCKET
+              # and K8s RBAC to manage student PVCs and cmu-user-overrides via hub_admin.py.
+              spawner.service_account = "tartan-admin"
+              spawner.automount_service_account_token = True
+          else:
+              spawner.service_account = "student"
+              spawner.automount_service_account_token = False
+
+      c.KubeSpawner.pre_spawn_hook = unified_pre_spawn_hook
+    pod-security: |
+      # Avoid recursive chown across high-inode volumes on pod startup.
+      c.KubeSpawner.pod_security_context = {
+          "fsGroup": 1000,
+          "fsGroupChangePolicy": "OnRootMismatch",
+      }
+    gcsfuse-config: |
+      # Required on every singleuser pod so the GKE GCS FUSE CSI webhook injects
+      # the sidecar that mounts /tartan/11785 and /ocean.
+      c.KubeSpawner.extra_annotations = {
+          "gke-gcsfuse/volumes": "true",
+      }
+      c.KubeSpawner.start_timeout = 900
     iap-auth: |
       import time
       import jwt
@@ -123,7 +221,7 @@ hub:
           now = time.time()
           if KEY_CACHE["keys"] and now < KEY_CACHE["expires_at"]:
               return KEY_CACHE["keys"]
-              
+
           req = urllib.request.Request(IAP_PUBLIC_KEYS_URL)
           with urllib.request.urlopen(req) as response:
               cache_control = response.headers.get("Cache-Control", "")
@@ -134,7 +232,7 @@ hub:
                           max_age = int(part.split("=")[1])
                       except ValueError:
                           pass
-              
+
               keys = json.loads(response.read())
               KEY_CACHE["keys"] = keys
               KEY_CACHE["expires_at"] = now + max_age
@@ -146,15 +244,13 @@ hub:
           key_id = header.get("kid")
           if not key_id:
               raise ValueError("No 'kid' found in JWT header")
-              
+
           keys = get_iap_public_keys()
           pub_key = keys.get(key_id)
           if not pub_key:
               raise ValueError(f"Public key for kid {key_id} not found")
-          
+
           # Verify the signature, issuer, and expiration
-          # (For production, you should also provide the 'audience' parameter 
-          # which is the backend service ID).
           claims = jwt.decode(
               jwt_str,
               key=pub_key,
@@ -162,10 +258,10 @@ hub:
               options={"verify_aud": False},
               issuer="https://cloud.google.com/iap"
           )
-          
+
           if "email" not in claims:
               raise ValueError("IAP JWT assertion missing verified email claim")
-              
+
           return claims
 
       class IAPLoginHandler(LoginHandler):
@@ -266,64 +362,43 @@ prePuller:
 
 cull:
   enabled: true
+  # When false, admin servers (e.g. staff/instructors) are never killed by idle timeout or maxAge.
+  adminUsers: __CULL_ADMIN_USERS__
   # A student who closes the laptop should not hold a pod all night. One hour idle,
-  # checked every five minutes. maxAge 12h catches the tab left open over a weekend.
+  # checked every five minutes. maxAge catches the tab left open over a weekend.
   timeout: 3600
   every: 300
   maxAge: 28800
 
 singleuser:
+  # Required for GKE GCS FUSE CSI driver to inject sidecar and mount /tartan/11785
+  extraAnnotations:
+    gke-gcsfuse/volumes: "true"
+
+  # Student KSA has Workload Identity read-only access (objectViewer) to TARTAN_BUCKET
+  # and zero Kubernetes RBAC (automountServiceAccountToken: false).
+  serviceAccountName: student
+
   # z2jh ships a `block-cloud-metadata` initContainer that runs privileged with
   # NET_ADMIN and installs an iptables rule against 169.254.169.254. Autopilot rejects
-  # it outright:
+  # it outright.
   #
-  #   denied by autogke-disallow-privilege: container block-cloud-metadata is privileged
-  #   denied by autogke-default-linux-capabilities: capability 'NET_ADMIN' not allowed
-  #
-  # The spawn fails with a 400 from the GKE Warden webhook and the pod never appears,
-  # so this is the first thing that breaks z2jh on Autopilot.
-  #
-  # Turning it off is the DOCUMENTED answer here, not a workaround. z2jh blocks the
-  # metadata endpoint two ways and only needs one. The second way is the singleuser
-  # NetworkPolicy, which already denies 169.254.169.254, and the z2jh security guide
-  # says to prefer that and set blockWithIptables to false whenever a NetworkPolicy
-  # controller is present. GKE Dataplane V2 is Cilium, so one is present.
-  #   https://z2jh.jupyter.org/en/stable/administrator/security.html
-  #
-  # Two conditions must hold before you copy this line elsewhere:
-  #   1. A NetworkPolicy controller enforces policy. Without one the cluster silently
-  #      ignores the rules and nothing blocks the metadata server at all.
-  #   2. networkPolicy.enabled stays true and egressAllowRules.cloudMetadataServer
-  #      stays false, below. Since chart 3.0.0 setting blockWithIptables AND
-  #      cloudMetadataServer both true is rejected as ambiguous.
-  #
-  # This cluster also runs Workload Identity in GKE_METADATA mode, which puts the GKE
-  # Metadata Server between the pod and the node service account. That is defence in
-  # depth, not the reason this is safe.
+  # Meanwhile, the GKE GCS FUSE CSI sidecar on each pod must reach the GKE Workload
+  # Identity metadata server (169.254.169.254) to exchange the pod's KSA identity for
+  # a short-lived GCS token (read-only on TARTAN_BUCKET for `student`, read-write for
+  # `tartan-admin`). Because the cluster runs Workload Identity in GKE_METADATA mode,
+  # the node service account is never exposed—only the pod's own KSA is reachable.
   cloudMetadata:
     blockWithIptables: false
 
   # z2jh puts a NetworkPolicy on singleuser pods that denies egress to private IP
-  # ranges. That is a good default, and it means the notebook cannot reach the
-  # tpu-submit service, which has a private pod address. The symptom is a bare connect
-  # timeout, with nothing in any log, because the packet is dropped rather than refused.
-  #
-  # Open exactly the tpu-submit pods and nothing else. Do NOT reach for
-  # privateIPs: true -- that would let student code talk to every other pod and node in
-  # the cluster, including other students' notebooks.
-  #
-  # Select the PODS, not the Service's ClusterIP. GKE Dataplane V2 (Cilium) evaluates
-  # egress policy after the Service DNAT, so by the time policy runs the destination is
-  # already a pod IP. A podSelector matches that; an ipBlock for the ClusterIP never
-  # would.
-  #
-  # Notebooks do not talk to the Kubernetes API at all any more. The earlier design
-  # allowed the API server endpoint here so submit_tpu.py could create Jobs itself;
-  # that let any student create, read, or delete anyone's Jobs and logs.
+  # ranges. Open only the tpu-submit pods (port 8080) and the GKE metadata server
+  # (needed by gcsfuse for Workload Identity). Students cannot reach other pods or the
+  # Kubernetes API server.
   networkPolicy:
     enabled: true
     egressAllowRules:
-      cloudMetadataServer: false
+      cloudMetadataServer: true
       privateIPs: false
     egress:
       - to:
@@ -336,67 +411,91 @@ singleuser:
 
   storage:
     type: dynamic
-    # 32Gi, not 10Gi. A 112x112 uint8 train-set disk cache is ~16 GiB
-    # (431k images x 112 x 112 x 3). A 10Gi home volume fills around a
-    # quarter of that write and the notebook is killed with ENOSPC.
-    # 32Gi holds the raw JPEGs plus the .npy cache with headroom.
-    # This size applies to newly provisioned PVCs only; existing 10Gi
-    # volumes stay 10Gi until expanded (StorageClass allows it) or deleted.
+    # Tier 1: Persistent User Workspace (/home/jovyan)
+    # 32Gi holds notebooks, code, local virtualenvs, and temporary caches.
     capacity: 32Gi
     dynamic:
       storageClass: standard-rwo-retain
+    # Tier 2: Central Course Tartan Store (/tartan/11785 & /ocean) via GCS FUSE CSI Driver
+    # Provides high-throughput shared access to course datasets, shared Python environments,
+    # and starter notebooks. Read-only for students; read-write for admins via pre_spawn_hook.
+    extraVolumes:
+      - name: course-tartan
+        csi:
+          driver: gcsfuse.csi.storage.gke.io
+          readOnly: true
+          volumeAttributes:
+            bucketName: __TARTAN_BUCKET__
+            mountOptions: "implicit-dirs,file-cache:max-size-mb:0,metadata-cache:stat-cache-max-size-mb:2048,metadata-cache:ttl-secs:60,uid=1000,gid=1000,dir-mode=0777,file-mode=0777,ro"
+    extraVolumeMounts:
+      - name: course-tartan
+        mountPath: /tartan/11785
+        readOnly: true
+      - name: course-tartan
+        mountPath: /ocean
+        readOnly: true
   # A notebook holds live state and a person is waiting on it. TPU jobs are fungible and
-  # get student-tpu-job (100) instead, so chips yield and sessions do not. Before this,
-  # everything sat at priority 0 and a running notebook was evicted mid-session during a
-  # scale test. See k8s/priority-classes.yaml.
+  # get student-tpu-job (100) instead, so chips yield and sessions do not.
   extraPodConfig:
     priorityClassName: student-notebook
     # GKE Sandbox (gVisor) provides strong container isolation. Cloud TPU pods
     # cannot use gVisor, so this is disabled on the Pinned TPU profile.
     runtimeClassName: gvisor
+    securityContext:
+      fsGroup: 1000
+      fsGroupChangePolicy: "OnRootMismatch"
   extraEnv:
     # Where submit_tpu.py sends jobs. Same namespace, so the short Service name resolves.
     TPU_SUBMIT_URL: "http://tpu-submit:8080"
-    # submit_tpu.py is mounted here rather than into /home/jovyan, because the home
-    # directory is a PVC and a ConfigMap mount would fight it.
+    SHARED_ENV_NAME: "__SHARED_ENV_NAME__"
+    TARTAN_BUCKET: "__TARTAN_BUCKET__"
+    # submit_tpu.py and platform_config.py are mounted here rather than into /home/jovyan,
+    # because the home directory is a PVC and a ConfigMap mount would fight it.
     PYTHONPATH: "/opt/course"
-  # 03_deploy_hub.sh fills stringData from notebooks/submit_tpu.py with helm
-  # --set-file, so the helper stays one real file instead of a copy pasted into YAML.
+    # Discover shared course kernels installed on /tartan/11785/share/jupyter/kernels
+    JUPYTER_PATH: "/tartan/11785/share/jupyter:/ocean/share/jupyter:/opt/conda/share/jupyter"
+  # 03_deploy_hub.sh fills stringData from notebooks/* with helm --set-file.
   extraFiles:
+    platform_config.py:
+      mountPath: /opt/course/platform_config.py
+      stringData: "placeholder, replaced at deploy time"
     submit_tpu.py:
       mountPath: /opt/course/submit_tpu.py
+      stringData: "placeholder, replaced at deploy time"
+    student.env.template:
+      mountPath: /opt/course/student.env.template
       stringData: "placeholder, replaced at deploy time"
     hw0_tpu_hello.ipynb:
       mountPath: /opt/course/hw0_tpu_hello.ipynb
       stringData: "placeholder, replaced at deploy time"
-  # Copy the hello-world assignment into the student's home directory at spawn.
-  #
-  #    extraFiles mounts are
-  #    read-only ConfigMap volumes, so the notebook cannot live in /home/jovyan
-  #    directly -- the home directory is a PVC and the two would fight. Mount it under
-  #    /opt/course and copy on first spawn instead.
-  #
-  #    `cp -n` matters: without it, every restart would overwrite the student's work
-  #    with the blank assignment.
+    tpu_platform_guide.ipynb:
+      mountPath: /opt/course/00_tpu_platform_guide.ipynb
+      stringData: "placeholder, replaced at deploy time"
+  # Copy starter notebooks and .env template into the student's home directory on first spawn.
+  # `cp -n` never overwrites existing student work on subsequent restarts.
   lifecycleHooks:
     postStart:
       exec:
         command:
           - "sh"
           - "-c"
-          - "cp -n /opt/course/hw0_tpu_hello.ipynb /home/jovyan/ 2>/dev/null || true"
-  startTimeout: 600  # Extend from default 300s to 600s for dynamic GKE Autopilot node scale-up and CSI disk attachment
+          - >-
+            mkdir -p /home/jovyan/checkpoints /home/jovyan/data &&
+            cp -n /opt/course/*.ipynb /home/jovyan/ 2>/dev/null || true;
+            cp -n /opt/course/student.env.template /home/jovyan/.env 2>/dev/null || true
+  startTimeout: 900  # Extend to 900s for dynamic GKE Autopilot node scale-up and GCS FUSE attachment
   defaultUrl: "/lab"
   image:
-    name: us-docker.pkg.dev/__PROJECT__/cmu-idl/jupyter-course-image
-    tag: "latest"
+    name: quay.io/jupyter/scipy-notebook
+    tag: "2024-11-11"
+    pullPolicy: IfNotPresent
 
   profileList:
     - display_name: "Course default (CPU notebook)"
       description: >-
-        2 vCPU, 16 GB RAM, 32 GiB home disk. Where you write and debug. Send training scripts
-        to a TPU chip from here with submit_tpu.submit(); the chip is attached only while
-        your job runs.
+        2 vCPU, 16 GB RAM, 32 GiB home disk + /tartan/11785 shared storage. Where you write and debug.
+        Send training scripts to a TPU chip from here with submit_tpu.submit(); the chip is attached
+        only while your job runs.
       default: true
       # Sized for CMU 11-785 HW2P2 image disk caching (~16 GiB uint8) with bursting headroom.
       # cpu_guarantee: 1 allows dense GKE Autopilot node packing while bursting to 2 vCPU.
@@ -410,28 +509,45 @@ singleuser:
         node_selector:
           cloud.google.com/gke-spot: "true"
 
-    # Commented out for general students to protect regional CPU quotas.
-    # Staff / instructors who need large compute can use the staff profile below.
-    # - display_name: "Large CPU notebook"
-    #   description: >-
-    #     8 vCPU, 32 GB, for dataset preprocessing, tokenizer training, or an
-    #     in-memory image cache. Still no accelerator — TPU work goes through the
-    #     queue.
-    #   kubespawner_override:
-    #     cpu_limit: 8
-    #     cpu_guarantee: 8
-    #     mem_limit: 32G
-    #     mem_guarantee: 32G
-    #     node_selector:
-    #       cloud.google.com/gke-spot: "true"
-
-    - display_name: "Pinned TPU v5e notebook (staff only)"
+    # Tier 1: Capstone Project / Research Grant Profile (visible to granted students + admins)
+    - display_name: "Tier 1: Capstone Project Grant (4 vCPU, 32 GB RAM)"
       description: >-
-        One v5e chip attached to the notebook for as long as it runs, for interactive
-        debugging. Bills the whole ct5lp-hightpu-1t node at about $1.35/hr. Staff only,
-        because a class of 300 doing this is $360/hr.
+        Expanded CPU & memory allocation for approved capstone teams and research grants,
+        plus shared team storage under /tartan/11785/projects/<team-name>.
+      allowed_groups:
+        - project-grant-tier1
+        - staff
+      kubespawner_override:
+        cpu_limit: 4
+        cpu_guarantee: 2
+        mem_limit: "32G"
+        mem_guarantee: "8G"
+        node_selector:
+          cloud.google.com/gke-spot: "true"
+
+    # Admin / Power User CPU Workstation (visible to instructors, TAs, and admins)
+    - display_name: "Admin / Power User CPU Workstation (8 vCPU, 32 GB RAM)"
+      description: >-
+        High-memory CPU workstation for dataset preparation, grading pipelines,
+        and managing student storage allocations via hub_admin.py. Mounts /tartan/11785 read-write.
       allowed_groups:
         - staff
+        - admin
+      kubespawner_override:
+        cpu_limit: 8
+        cpu_guarantee: 4
+        mem_limit: "32G"
+        mem_guarantee: "16G"
+        node_selector:
+          cloud.google.com/gke-spot: "true"
+
+    - display_name: "Pinned TPU v5e-1 (1 Chip — Staff / Admin Only)"
+      description: >-
+        Single TPU v5e chip (ct5lp-hightpu-1t, 1x1 topology, 16 GB HBM) attached directly
+        to the notebook for interactive debugging (~$1.35/hr). Staff & admins only.
+      allowed_groups:
+        - staff
+        - admin
       kubespawner_override:
         image: us-docker.pkg.dev/cloud-tpu-images/jax-ai-image/tpu:latest
         extra_resource_limits:
@@ -449,4 +565,26 @@ singleuser:
             effect: NoSchedule
         # Shorter leash than the CPU profiles. An idle pinned chip is the single most
         # expensive thing a person can leave running in this cluster.
+        cull_timeout: 1800
+
+    - display_name: "Pinned TPU v5e-4 (4 Chips, 2x2 Pod Slice — Staff / Admin Only)"
+      description: >-
+        4-chip TPU v5e pod slice (ct5lp-hightpu-4t, 2x2 topology, 64 GB total HBM) for
+        multi-chip data/model parallelism (pmap / shard_map) debugging (~$5.40/hr). Staff & admins only.
+      allowed_groups:
+        - staff
+        - admin
+      kubespawner_override:
+        image: us-docker.pkg.dev/cloud-tpu-images/jax-ai-image/tpu:latest
+        extra_resource_limits:
+          google.com/tpu: "4"
+        extra_pod_config:
+          runtimeClassName: ""
+        node_selector:
+          cloud.google.com/gke-tpu-accelerator: tpu-v5-lite-podslice
+          cloud.google.com/gke-tpu-topology: 2x2
+        tolerations:
+          - key: google.com/tpu
+            operator: Exists
+            effect: NoSchedule
         cull_timeout: 1800

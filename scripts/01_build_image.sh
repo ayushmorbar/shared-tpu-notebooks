@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Script: 01_build_image.sh
-# Description: Build and push the course images.
+# Description: Build and push the TPU job and submission service images.
 #
-#   notebook    docker/              the CPU notebook every student gets (scipy-notebook
-#                                    plus the course libraries and HW unit-test deps)
 #   tpu-job     docker/tpu-job/      what student training scripts run in on the chip
 #   tpu-submit  services/tpu-submit/ the submission service
 #
+# Note: Student CPU notebooks use the upstream quay.io/jupyter/scipy-notebook image
+# paired with the zero-rebuild shared Python environment on /tartan/11785/envs/
+# (provisioned via `make shared-env` / scripts/09_setup_shared_env.sh).
+#
 # Usage:
-#   make image                       all three
+#   make image                       both tpu-job and tpu-submit
 #   bash scripts/01_build_image.sh tpu-job
 # ==============================================================================
 
@@ -18,7 +20,7 @@ require_project
 check_prereqs gcloud docker
 
 TARGETS=("${@:-all}")
-[[ "${TARGETS[0]}" == "all" ]] && TARGETS=(notebook tpu-job tpu-submit)
+[[ "${TARGETS[0]}" == "all" ]] && TARGETS=(tpu-job tpu-submit)
 
 log_header "Building & Pushing Course Images: ${TARGETS[*]}"
 log_info "Registry: ${COURSE_REGISTRY}"
@@ -78,7 +80,8 @@ build_push() {
 for target in "${TARGETS[@]}"; do
   case "${target}" in
     notebook)
-      build_push "${NOTEBOOK_IMAGE}" "${REPO_ROOT}/docker" ;;
+      log_info "Notebook pods use ${SINGLEUSER_IMAGE}:${SINGLEUSER_IMAGE_TAG} + Tartan shared-env."
+      log_info "To install or update notebook Python packages, run: make shared-env" ;;
     tpu-job)
       # TPU nodes are amd64; build for it even from an arm64 laptop.
       build_push "${TPU_JOB_IMAGE}" --platform linux/amd64 \
@@ -86,7 +89,7 @@ for target in "${TARGETS[@]}"; do
     tpu-submit)
       build_push "${SUBMIT_IMAGE}" --platform linux/amd64 "${REPO_ROOT}/services/tpu-submit" ;;
     *)
-      log_error "unknown image '${target}' (expected notebook, tpu-job, tpu-submit, or all)"
+      log_error "unknown image '${target}' (expected tpu-job, tpu-submit, or all)"
       exit 1 ;;
   esac
 done

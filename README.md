@@ -88,26 +88,29 @@ A student holds a chip **only while their job runs**. Short HW0-style runs take 
 # 1. Zero-cost Preflight (validates regional TPU_LITE_PODSLICE_V5 quotas and flex zones)
 make preflight PROJECT=my-project REGION=us-west4
 
-# 2. Build & Push the notebook, TPU job, and tpu-submit images
+# 2. Build & Push the TPU job and tpu-submit images
 make image PROJECT=my-project REGION=us-west4
 
 # 3. Create Autopilot Cluster, Kueue Queues, PriorityClasses & StorageClasses (~12 min)
 make cluster PROJECT=my-project REGION=us-west4 NS=cmu-idl
 
-# 4. Create the job and dataset buckets, then upload an assignment's dataset once
+# 4. Create the Tartan shared bucket and private student-runs bucket (+ Workload Identity)
 make storage PROJECT=my-project REGION=us-west4 NS=cmu-idl
-bash scripts/12_setup_storage.sh upload hw3p2 /path/to/hw3p2_data   # prints DATASETS= for config.env
+bash scripts/12_setup_storage.sh upload hw3p2 /path/to/hw3p2_data   # optional dataset tarball
 
-# 5. Deploy the TPU submission service & JupyterHub
+# 5. Provision the zero-rebuild shared Python environment on /tartan/11785/envs/idlf26jax
+make shared-env PROJECT=my-project REGION=us-west4 NS=cmu-idl
+
+# 6. Deploy the TPU submission service & JupyterHub
 make hub PROJECT=my-project REGION=us-west4 NS=cmu-idl
 
-# 6. Run Smoke Test (submits 1 real TPU job on 1 real v5e chip)
+# 7. Run Smoke Test (submits 1 real TPU job on 1 real v5e chip)
 make smoke PROJECT=my-project REGION=us-west4 NS=cmu-idl
 
-# 7. Secure with HTTPS & Google Identity-Aware Proxy (IAP)
+# 8. Secure with HTTPS & Google Identity-Aware Proxy (IAP)
 make iap PROJECT=my-project REGION=us-west4 NS=cmu-idl
 
-# 8. The student path end to end, with a token from https://<hub>/hub/token
+# 9. The student path end to end, with a token from https://<hub>/hub/token
 HUB_TOKEN=... make smoke-submit PROJECT=my-project NS=cmu-idl
 ```
 
@@ -272,8 +275,10 @@ Conducted in `us-west4` with 4 lab sections sharing a single Kueue cohort:
 | `STUDENT_GROUP` | *Optional* | Google Group for enrolled students (`group:students@cmu.edu`). |
 | `TA_GROUP` | *Optional* | Google Group for course TAs (`group:tas@cmu.edu`). |
 | `ADMIN_USERS` | *Optional* | Admin user emails (`user:instructor@cmu.edu`). |
-| `STUDENT_BUCKET` | `<PROJECT>-tpu-runs` | Job snapshots, logs, and checkpoints. Only tpu-submit can use it. |
-| `DATASET_BUCKET` | `<PROJECT>-course-data` | Dataset archives. TPU jobs can read it, nothing can write it from the cluster. |
+| `TARTAN_BUCKET` | `<PROJECT>-tartan` | Shared course drive mounted at `/tartan/11785` and `/ocean` (read-only for students & TPU jobs; read-write for staff). |
+| `SHARED_ENV_NAME` | `idlf26jax` | Zero-rebuild shared Python environment under `/tartan/11785/envs/<name>`. |
+| `STUDENT_BUCKET` | `<PROJECT>-tpu-runs` | Job snapshots, logs, and checkpoints. Only `tpu-submit` can use it. |
+| `DATASET_BUCKET` | `<TARTAN_BUCKET>` | Dataset `.tar` archives. TPU jobs can read it, nothing can write it from student pods. |
 | `DATASETS` / `DEFAULT_DATASET` | *Empty* | `name=gs://...` archives students can pick with `submit(dataset=...)`. |
 | `MAX_JOB_HOURS` | `8` | Run-time limit per job (queue time not counted). |
 | `CHIP_HOUR_BUDGET` | `0` (off) | Total chip-hours per student. |
@@ -345,9 +350,8 @@ Confirm regional quota for the target generation via `make preflight` before mod
 shared-tpu-notebooks/
 ├── Makefile                     # Central build, deploy, test, and teardown interface
 ├── README.md                    # Complete architectural and operational manual
+├── requirements.txt             # Packages installed into /tartan/11785/envs/ via make shared-env
 ├── docker/
-│   ├── Dockerfile               # Scipy-notebook image extended with JAX TPU stack
-│   ├── requirements.txt         # Pinned Python ML dependencies (JAX, PyTorch, W&B, HW libs)
 │   └── tpu-job/                 # Image student scripts run in on the chip
 │       ├── Dockerfile           # FROM Google's JAX TPU image + HW3 deps (CPU torch, tokenizers...)
 │       └── tpu_entrypoint.py    # Fetch files & dataset, run the script, upload logs & expts/
@@ -362,7 +366,10 @@ shared-tpu-notebooks/
 │   ├── tpu-submit.yaml          # tpu-submit Deployment, RBAC, NetworkPolicy, service accounts
 │   └── tpu-warm-pool.yaml       # Priority -10 placeholder deployment & auto-off CronJob
 ├── notebooks/
+│   ├── 00_tpu_platform_guide.ipynb  # Interactive guide to Tartan storage & TPU submission
 │   ├── hw0_tpu_hello.ipynb      # Sample assignment: Attention FLOPs & roofline analysis
+│   ├── platform_config.py       # Tartan storage paths & shared environment helper
+│   ├── student.env.template     # Template for student API keys (/home/jovyan/.env)
 │   └── submit_tpu.py            # Student client: submit, watch, status, cancel, pull
 └── scripts/
     ├── 00_preflight.sh          # Regional quota and accelerator discovery (Read-only)
@@ -375,9 +382,13 @@ shared-tpu-notebooks/
     ├── 06_hub_spawn_test.py     # Concurrent JupyterHub spawn latency benchmark
     ├── 07_warm_pool.sh          # CLI tool to manage warm TPU node placeholders
     ├── 08_setup_iap.sh          # Cloud IAP, static IP, and IAM binding automation
+    ├── 09_setup_shared_env.sh   # Build/update zero-rebuild Python env on /tartan/11785/envs/
     ├── 10_cleanup_pvcs.sh       # End-of-term PVC and retained persistent disk cleanup
-    ├── 12_setup_storage.sh      # Job & dataset buckets, Workload Identity bindings, dataset upload
+    ├── 11_expand_pvcs.sh        # Online PVC expansion utility
+    ├── 12_create_secrets.sh     # Optional cluster-level baseline Secret helper
+    ├── 12_setup_storage.sh      # Tartan & student-runs buckets, Workload Identity, dataset upload
     ├── 13_smoke_submit.sh       # End-to-end submit through tpu-submit with submit_tpu.py
+    ├── hub_admin.py             # Admin CLI for PVC expansion and Capstone grant tiers
     └── 99_teardown.sh           # Full infrastructure teardown with zero-cost verification
 ```
 

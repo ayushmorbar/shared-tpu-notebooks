@@ -97,3 +97,24 @@ def test_clean_relpath_rejects_escapes():
         assert names.clean_relpath(bad) is None, bad
     assert names.clean_relpath("a//b") == "a/b"
     assert names.clean_relpath("expts/run/checkpoints/last.msgpack") == "expts/run/checkpoints/last.msgpack"
+
+
+def test_tartan_bucket_mounts_gcsfuse_read_only(settings):
+    from dataclasses import replace
+
+    tartan_settings = replace(settings, tartan_bucket="cmu-idl-ocean", tartan_mount_path="/tartan/11785")
+    job = job_for(tartan_settings)
+    tpl = job["spec"]["template"]
+    assert tpl["metadata"]["annotations"]["gke-gcsfuse/volumes"] == "true"
+
+    container = tpl["spec"]["containers"][0]
+    mounts = {m["mountPath"]: m for m in container["volumeMounts"]}
+    assert mounts["/tartan/11785"]["readOnly"] is True
+    assert mounts["/ocean"]["readOnly"] is True
+
+    vols = {v["name"]: v for v in tpl["spec"]["volumes"]}
+    assert vols["course-tartan"]["csi"]["driver"] == "gcsfuse.csi.storage.gke.io"
+    assert vols["course-tartan"]["csi"]["readOnly"] is True
+    assert vols["course-tartan"]["csi"]["volumeAttributes"]["bucketName"] == "cmu-idl-ocean"
+    assert ",ro" in vols["course-tartan"]["csi"]["volumeAttributes"]["mountOptions"]
+
