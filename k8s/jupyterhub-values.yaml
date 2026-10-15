@@ -259,6 +259,16 @@ hub:
           "gke-gcsfuse/volumes": "true"
       }
       c.KubeSpawner.start_timeout = 900
+
+      async def custom_pre_spawn_hook(spawner):
+          profile = spawner.user_options.get("profile", "")
+          # When Admin / Power User profile is selected, make Tartan mount read-write by stripping ',ro'
+          if "Admin" in profile or "Power User" in profile:
+              for v in spawner.volumes:
+                  if v.get("name") == "course-tartan":
+                      opts = v.get("csi", {}).get("volumeAttributes", {}).get("mountOptions", "")
+                      v["csi"]["volumeAttributes"]["mountOptions"] = opts.replace(",ro", "")
+      c.KubeSpawner.pre_spawn_hook = custom_pre_spawn_hook
   # Autopilot rejects privileged pods and enforces Pod Security Standards. Give the
   # hub an explicit non-root context rather than letting the chart's default get
   # rewritten by the Autopilot mutating webhook.
@@ -318,8 +328,10 @@ prePuller:
 
 cull:
   enabled: true
+  # When false, servers of admin users (amorbar, staff) are exempt from idle timeout and maxAge culling
+  adminUsers: __CULL_ADMIN_USERS__
   # A student who closes the laptop should not hold a pod all night. One hour idle,
-  # checked every five minutes. maxAge 12h catches the tab left open over a weekend.
+  # checked every five minutes. maxAge catches the tab left open over a weekend.
   timeout: 3600
   every: 300
   maxAge: 28800
@@ -502,14 +514,14 @@ singleuser:
       kubespawner_override:
         cpu_limit: 4
         cpu_guarantee: 2
-        mem_limit: "32G"
-        mem_guarantee: "8G"
+        mem_limit: "32Gi"
+        mem_guarantee: "8Gi"
         node_selector:
           cloud.google.com/gke-spot: "true"
 
     - display_name: "Admin / Power User CPU Workstation"
       description: >-
-        16 vCPU, 64 GiB RAM, 100 GiB scratch. High-throughput data caching, tokenization,
+        16 vCPU, 64 GiB RAM. High-throughput data caching, tokenization,
         and distributed preprocessing for course maintainers (amorbar / staff).
       allowed_groups:
         - staff
@@ -517,22 +529,8 @@ singleuser:
       kubespawner_override:
         cpu_limit: 16
         cpu_guarantee: 8
-        mem_limit: "64G"
-        mem_guarantee: "32G"
-        node_selector:
-          cloud.google.com/gke-spot: "false"
-        extra_volumes:
-          - name: course-tartan
-            csi:
-              driver: gcsfuse.csi.storage.gke.io
-              volumeAttributes:
-                bucketName: __TARTAN_BUCKET__
-                mountOptions: "implicit-dirs,file-cache:max-size-mb:50000,metadata-cache:stat-cache-max-size-mb:2048,metadata-cache:ttl-secs:60,uid=1000,gid=1000,dir-mode=0777,file-mode=0777"
-        extra_volume_mounts:
-          - name: course-tartan
-            mountPath: /tartan/11785
-          - name: course-tartan
-            mountPath: /ocean
+        mem_limit: "64Gi"
+        mem_guarantee: "32Gi"
 
     - display_name: "Pinned TPU v5e-1 notebook (staff & capstone grants)"
       description: >-
@@ -558,9 +556,6 @@ singleuser:
           - key: google.com/tpu
             operator: Exists
             effect: NoSchedule
-        # Shorter leash than the CPU profiles. An idle pinned chip is the single most
-        # expensive thing a person can leave running in this cluster.
-        cull_timeout: 1800
 
     - display_name: "Pinned TPU v5e-4 Podslice (4 chips - 2x2 topology, staff/admin only)"
       description: >-
@@ -583,4 +578,3 @@ singleuser:
           - key: google.com/tpu
             operator: Exists
             effect: NoSchedule
-        cull_timeout: 1800
