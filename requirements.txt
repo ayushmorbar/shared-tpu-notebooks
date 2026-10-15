@@ -2,7 +2,7 @@
 # CMU 11-785: Shared TPU Course Python Requirements
 # ==============================================================================
 # Installed into the zero-rebuild shared environment on Tartan storage:
-#   /tartan/11785/envs/idl-shared-env
+#   /tartan/11785/envs/idlf26jax
 #
 # Run 'make shared-env' to provision or update the environment in GCS.
 # ==============================================================================

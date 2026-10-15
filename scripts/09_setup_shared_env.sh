@@ -176,10 +176,20 @@ if [[ -z "${POD_NAME}" ]]; then
 fi
 
 log_info "Builder Pod: ${POD_NAME}"
-log_info "Streaming build and package installation logs in real time..."
-kubectl -n "${NAMESPACE}" logs -f "${POD_NAME}" -c env-builder --pod-running-timeout=10m || true
+log_info "Waiting for container to pull base image and start..."
+for i in {1..120}; do
+  STATE=$(kubectl -n "${NAMESPACE}" get pod "${POD_NAME}" -o jsonpath='{.status.containerStatuses[?(@.name=="env-builder")].state}' 2>/dev/null || true)
+  if [[ "${STATE}" =~ "running" || "${STATE}" =~ "terminated" ]]; then
+    break
+  fi
+  sleep 3
+done
 
-if ! kubectl -n "${NAMESPACE}" wait --for=condition=complete "job/${JOB_NAME}" --timeout=30s >/dev/null 2>&1; then
+log_info "Streaming build and package installation logs in real time..."
+kubectl -n "${NAMESPACE}" logs -f "${POD_NAME}" -c env-builder || true
+
+log_info "Confirming Job completion..."
+if ! kubectl -n "${NAMESPACE}" wait --for=condition=complete "job/${JOB_NAME}" --timeout=1200s >/dev/null 2>&1; then
   log_warn "Job did not report complete. Fetching diagnostic pod events:"
   kubectl -n "${NAMESPACE}" describe pod "${POD_NAME}" | tail -n 25
   exit 1
