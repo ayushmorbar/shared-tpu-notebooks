@@ -22,7 +22,7 @@ ENV_NAME="${ENV_NAME:-${SHARED_ENV_NAME:-idlf26jax}}"
 REQ_FILE="${REQ_FILE:-${REQUIREMENTS_FILE:-requirements.txt}}"
 ENV_BUILDER_CPU="${ENV_BUILDER_CPU:-2}"
 ENV_BUILDER_MEMORY="${ENV_BUILDER_MEMORY:-8Gi}"
-ENV_BUILDER_STORAGE="${ENV_BUILDER_STORAGE:-20Gi}"
+ENV_BUILDER_STORAGE="${ENV_BUILDER_STORAGE:-10Gi}"
 
 # Resolve path to requirements.txt (relative to repo root or cwd)
 if [[ ! -f "${REQ_FILE}" ]]; then

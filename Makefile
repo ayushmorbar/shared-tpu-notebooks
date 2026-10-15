@@ -28,7 +28,7 @@ SHARED_ENV_NAME      ?= idlf26jax
 REQUIREMENTS_FILE    ?= requirements.txt
 ENV_BUILDER_CPU      ?= 2
 ENV_BUILDER_MEMORY   ?= 8Gi
-ENV_BUILDER_STORAGE  ?= 20Gi
+ENV_BUILDER_STORAGE  ?= 10Gi
 TARTAN_BUCKET        ?= cmu-idl-ocean
 OCEAN_BUCKET         ?= $(TARTAN_BUCKET)
 
