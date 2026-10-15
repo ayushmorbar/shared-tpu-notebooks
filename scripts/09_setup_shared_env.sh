@@ -141,6 +141,10 @@ spec:
                 --display-name="Python \${PY_VER} (CMU 11-785: ${ENV_NAME})" \
                 --env PYTHONPATH "\${SITE_PACKAGES}:/opt/course"
 
+              echo "==> Configuring kernel.json for container execution..."
+              CONTAINER_PY=\$(python3 -c "import sys; print(sys.executable)")
+              python3 -c "import json; p = '${TARTAN_MOUNT_PATH}/share/jupyter/kernels/${KERNEL_NAME}/kernel.json'; d = json.load(open(p)); d['argv'][0] = '\${CONTAINER_PY}'; d.setdefault('env', {})['VIRTUAL_ENV'] = '${SHARED_ENV_PATH}'; d['env']['PATH'] = '${SHARED_ENV_PATH}/bin:' + d['env'].get('PATH', '/opt/conda/bin:/usr/local/bin:/usr/bin:/bin'); json.dump(d, open(p, 'w'), indent=2)"
+
               echo "✓ Shared environment '${ENV_NAME}' (Python \${PY_VER}) successfully initialized!"
           volumeMounts:
             - name: course-tartan-rw
