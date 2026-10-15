@@ -1,0 +1,39 @@
+# ==============================================================================
+# CMU 11-785: Shared TPU Course Python Requirements
+# ==============================================================================
+# Installed into the zero-rebuild shared environment on Tartan storage:
+#   /tartan/11785/envs/idl-shared-env
+#
+# Run 'make shared-env' to provision or update the environment in GCS.
+# ==============================================================================
+
+# Core JAX and Accelerator Stack
+jax[tpu]
+optax
+flax
+
+# PyTorch Ecosystem
+torch
+torchvision
+torchaudio
+
+# Computer Vision & Augmentation
+augmax
+timm
+
+# Experiment Tracking & Datasets
+kaggle>=1.8.0
+wandb>=0.23.1
+
+# Classical ML & Scientific Computing
+scikit-learn>=1.4.0
+scipy>=1.12.0
+pandas>=2.2.0
+numpy>=1.26.0
+matplotlib>=3.8.0
+
+# Infrastructure & Utilities
+kubernetes>=29.0.0
+ipykernel>=6.29.0
+tqdm>=4.66.0
+PyYAML>=6.0.1

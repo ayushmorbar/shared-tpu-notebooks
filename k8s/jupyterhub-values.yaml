@@ -438,10 +438,11 @@ singleuser:
       fsGroupChangePolicy: "OnRootMismatch"
   extraEnv:
     KUEUE_LOCAL_QUEUE: "tpu"
+    SHARED_ENV_NAME: "__SHARED_ENV_NAME__"
     # submit_tpu.py is mounted here rather than into /home/jovyan, because the home
     # directory is a PVC and a ConfigMap mount would fight it.
-    PYTHONPATH: "/opt/course:/tartan/11785/envs/idl-shared-env/lib/python3.11/site-packages"
-    # Scans shared Tartan/Ocean storage for course kernels (e.g. /tartan/11785/envs/idl-shared-env)
+    PYTHONPATH: "/opt/course:/tartan/11785/envs/__SHARED_ENV_NAME__/lib/python3.11/site-packages"
+    # Scans shared Tartan/Ocean storage for course kernels (e.g. /tartan/11785/envs/__SHARED_ENV_NAME__)
     JUPYTER_PATH: "/tartan/11785/share/jupyter:/ocean/share/jupyter:/opt/conda/share/jupyter"
   # 03_deploy_hub.sh fills stringData from notebooks/submit_tpu.py with helm
   # --set-file, so the helper stays one real file instead of a copy pasted into YAML.

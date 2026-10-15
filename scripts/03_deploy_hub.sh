@@ -105,6 +105,7 @@ sed -e "s|__APISERVER_ENDPOINT__|${APISERVER}|g" \
     -e "s|__TARTAN_BUCKET__|${TARGET_BUCKET}|g" \
     -e "s|__OCEAN_BUCKET__|${TARGET_BUCKET}|g" \
     -e "s|__PROJECT__|${PROJECT}|g" \
+    -e "s|__SHARED_ENV_NAME__|${SHARED_ENV_NAME:-idl-shared-env}|g" \
   "$(dirname "$0")/../k8s/jupyterhub-values.yaml" > "${VALUES}"
 
 IMAGE_NAME="${SINGLEUSER_IMAGE:-quay.io/jupyter/scipy-notebook}"

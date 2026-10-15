@@ -17,7 +17,8 @@ TARTAN_URI = os.environ.get("TARTAN_URI", f"gs://{TARTAN_BUCKET}")
 TARTAN_MOUNT = os.environ.get("TARTAN_MOUNT_PATH", "/tartan/11785")
 # Legacy equivalent mount path for Bridges-2 alike backward compatibility
 LEGACY_OCEAN_MOUNT = "/ocean"
-SHARED_ENV_PATH = os.environ.get("SHARED_ENV_DIR", f"{TARTAN_MOUNT}/envs/idl-shared-env")
+SHARED_ENV_NAME = os.environ.get("SHARED_ENV_NAME", "idl-shared-env")
+SHARED_ENV_PATH = os.environ.get("SHARED_ENV_DIR", f"{TARTAN_MOUNT}/envs/{SHARED_ENV_NAME}")
 
 # Aliases for backward compatibility
 OCEAN_BUCKET = TARTAN_BUCKET
