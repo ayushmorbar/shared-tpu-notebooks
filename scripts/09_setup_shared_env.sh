@@ -18,8 +18,11 @@ source "$(dirname "$0")/common.sh"
 require_project
 check_prereqs kubectl
 
-ENV_NAME="${ENV_NAME:-${SHARED_ENV_NAME:-idl-shared-env}}"
+ENV_NAME="${ENV_NAME:-${SHARED_ENV_NAME:-idlf26jax}}"
 REQ_FILE="${REQ_FILE:-${REQUIREMENTS_FILE:-requirements.txt}}"
+ENV_BUILDER_CPU="${ENV_BUILDER_CPU:-2}"
+ENV_BUILDER_MEMORY="${ENV_BUILDER_MEMORY:-8Gi}"
+ENV_BUILDER_STORAGE="${ENV_BUILDER_STORAGE:-20Gi}"
 
 # Resolve path to requirements.txt (relative to repo root or cwd)
 if [[ ! -f "${REQ_FILE}" ]]; then
@@ -37,12 +40,12 @@ JOB_NAME="setup-env-${SAFE_ENV_NAME}-${JOB_ID}"
 CM_NAME="env-req-${SAFE_ENV_NAME}-${JOB_ID}"
 SHARED_ENV_PATH="${TARTAN_MOUNT_PATH}/envs/${ENV_NAME}"
 KERNEL_NAME="kernel-${SAFE_ENV_NAME}"
-DISPLAY_NAME="Python 3.11 (CMU 11-785: ${ENV_NAME})"
 
 log_header "Provisioning Zero-Rebuild Shared Python Environment"
 log_info "Environment Name : ${ENV_NAME}"
 log_info "Target Directory : ${SHARED_ENV_PATH}"
 log_info "Requirements File: ${REQ_FILE}"
+log_info "Builder Resources: CPU=${ENV_BUILDER_CPU}, RAM=${ENV_BUILDER_MEMORY}, Storage=${ENV_BUILDER_STORAGE}"
 log_info "Base Image       : ${SINGLEUSER_IMAGE}:${SINGLEUSER_IMAGE_TAG}"
 
 ensure_k8s_context
@@ -85,6 +88,15 @@ spec:
           securityContext:
             runAsUser: 1000
             runAsGroup: 1000
+          resources:
+            requests:
+              cpu: "${ENV_BUILDER_CPU}"
+              memory: "${ENV_BUILDER_MEMORY}"
+              ephemeral-storage: "${ENV_BUILDER_STORAGE}"
+            limits:
+              cpu: "$((ENV_BUILDER_CPU * 2))"
+              memory: "${ENV_BUILDER_MEMORY}"
+              ephemeral-storage: "${ENV_BUILDER_STORAGE}"
           command:
             - "bash"
             - "-c"
@@ -102,16 +114,18 @@ spec:
               "${SHARED_ENV_PATH}/bin/pip" install --upgrade pip
 
               echo "==> Installing packages from requirements.txt..."
-              "${SHARED_ENV_PATH}/bin/pip" install -r /etc/requirements/requirements.txt
+              "${SHARED_ENV_PATH}/bin/pip" install --no-cache-dir -r /etc/requirements/requirements.txt
 
               echo "==> Registering system-wide Jupyter Kernel..."
+              SITE_PACKAGES=$("${SHARED_ENV_PATH}/bin/python" -c "import site; print(site.getsitepackages()[0])")
+              PY_VER=$("${SHARED_ENV_PATH}/bin/python" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
               "${SHARED_ENV_PATH}/bin/python" -m ipykernel install \
                 --prefix="${TARTAN_MOUNT_PATH}" \
                 --name="${KERNEL_NAME}" \
-                --display-name="${DISPLAY_NAME}" \
-                --env PYTHONPATH "${SHARED_ENV_PATH}/lib/python3.11/site-packages:/opt/course"
+                --display-name="Python ${PY_VER} (CMU 11-785: ${ENV_NAME})" \
+                --env PYTHONPATH "${SITE_PACKAGES}:/opt/course"
 
-              echo "✓ Shared environment '${ENV_NAME}' successfully initialized!"
+              echo "✓ Shared environment '${ENV_NAME}' (Python ${PY_VER}) successfully initialized!"
           volumeMounts:
             - name: course-tartan-rw
               mountPath: ${TARTAN_MOUNT_PATH}
@@ -155,4 +169,4 @@ if ! kubectl -n "${NAMESPACE}" wait --for=condition=complete "job/${JOB_NAME}" -
 fi
 
 log_success "Shared course environment '${ENV_NAME}' is active and ready on ${SHARED_ENV_PATH}."
-log_info "Jupyter Kernel registered: '${DISPLAY_NAME}'."
+log_info "Jupyter Kernel registered: 'kernel-${SAFE_ENV_NAME}' (prefix: ${TARTAN_MOUNT_PATH})."

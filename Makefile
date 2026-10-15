@@ -24,12 +24,15 @@ TPU_TOPOLOGY    ?= 1x1
 TPU_IMAGE       ?= us-docker.pkg.dev/cloud-tpu-images/jax-ai-image/tpu:latest
 SINGLEUSER_IMAGE     ?= quay.io/jupyter/scipy-notebook
 SINGLEUSER_IMAGE_TAG ?= 2024-11-11
-SHARED_ENV_NAME      ?= idl-shared-env
+SHARED_ENV_NAME      ?= idlf26jax
 REQUIREMENTS_FILE    ?= requirements.txt
+ENV_BUILDER_CPU      ?= 2
+ENV_BUILDER_MEMORY   ?= 8Gi
+ENV_BUILDER_STORAGE  ?= 20Gi
 TARTAN_BUCKET        ?= cmu-idl-ocean
 OCEAN_BUCKET         ?= $(TARTAN_BUCKET)
 
-export PROJECT REGION CLUSTER NS NAMESPACE=$(NS) STUDENTS POOL_CHIPS WARM DOMAIN STUDENT_GROUP TA_GROUP ADMIN_USERS TEST_ACCOUNTS TPU_ACCELERATOR TPU_TOPOLOGY TPU_IMAGE SINGLEUSER_IMAGE SINGLEUSER_IMAGE_TAG SHARED_ENV_NAME REQUIREMENTS_FILE TARTAN_BUCKET OCEAN_BUCKET
+export PROJECT REGION CLUSTER NS NAMESPACE=$(NS) STUDENTS POOL_CHIPS WARM DOMAIN STUDENT_GROUP TA_GROUP ADMIN_USERS TEST_ACCOUNTS TPU_ACCELERATOR TPU_TOPOLOGY TPU_IMAGE SINGLEUSER_IMAGE SINGLEUSER_IMAGE_TAG SHARED_ENV_NAME REQUIREMENTS_FILE ENV_BUILDER_CPU ENV_BUILDER_MEMORY ENV_BUILDER_STORAGE TARTAN_BUCKET OCEAN_BUCKET
 
 .PHONY: check preflight cluster image hub shared-env iap ip domain dns-record warm-on warm-off demo smoke scale report expand-pvcs expand-pvcs-dry-run clean-pvcs clean-pvcs-dry-run secrets teardown venv admin-list admin-grant admin-project help
 
@@ -52,10 +55,10 @@ image:
 
 # Provision or update a zero-rebuild shared Python environment on Tartan GCS store.
 # Usage:
-#   make shared-env                                (defaults to idl-shared-env and requirements.txt)
+#   make shared-env                                (defaults to idlf26jax and requirements.txt)
 #   make shared-env ENV=capstone-nlp REQ=reqs.txt
 shared-env: check
-	ENV_NAME="$(or $(ENV),$(SHARED_ENV_NAME),idl-shared-env)" \
+	ENV_NAME="$(or $(ENV),$(SHARED_ENV_NAME),idlf26jax)" \
 	REQ_FILE="$(or $(REQ),$(REQUIREMENTS_FILE),requirements.txt)" \
 	bash scripts/09_setup_shared_env.sh
 

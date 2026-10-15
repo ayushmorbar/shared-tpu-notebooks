@@ -20,6 +20,17 @@ LEGACY_OCEAN_MOUNT = "/ocean"
 SHARED_ENV_NAME = os.environ.get("SHARED_ENV_NAME", "idl-shared-env")
 SHARED_ENV_PATH = os.environ.get("SHARED_ENV_DIR", f"{TARTAN_MOUNT}/envs/{SHARED_ENV_NAME}")
 
+def setup_shared_env() -> None:
+    """Dynamically discover and register shared environment packages into sys.path."""
+    import sys
+    lib_dir = Path(SHARED_ENV_PATH) / "lib"
+    if lib_dir.exists():
+        for p in lib_dir.glob("python*/site-packages"):
+            if str(p) not in sys.path:
+                sys.path.insert(1, str(p))
+
+setup_shared_env()
+
 # Aliases for backward compatibility
 OCEAN_BUCKET = TARTAN_BUCKET
 OCEAN_URI = TARTAN_URI
