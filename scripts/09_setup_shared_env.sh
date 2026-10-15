@@ -117,15 +117,15 @@ spec:
               "${SHARED_ENV_PATH}/bin/pip" install --no-cache-dir -r /etc/requirements/requirements.txt
 
               echo "==> Registering system-wide Jupyter Kernel..."
-              SITE_PACKAGES=$("${SHARED_ENV_PATH}/bin/python" -c "import site; print(site.getsitepackages()[0])")
-              PY_VER=$("${SHARED_ENV_PATH}/bin/python" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+              SITE_PACKAGES=\$("${SHARED_ENV_PATH}/bin/python" -c "import site; print(site.getsitepackages()[0])")
+              PY_VER=\$("${SHARED_ENV_PATH}/bin/python" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
               "${SHARED_ENV_PATH}/bin/python" -m ipykernel install \
                 --prefix="${TARTAN_MOUNT_PATH}" \
                 --name="${KERNEL_NAME}" \
-                --display-name="Python ${PY_VER} (CMU 11-785: ${ENV_NAME})" \
-                --env PYTHONPATH "${SITE_PACKAGES}:/opt/course"
+                --display-name="Python \${PY_VER} (CMU 11-785: ${ENV_NAME})" \
+                --env PYTHONPATH "\${SITE_PACKAGES}:/opt/course"
 
-              echo "✓ Shared environment '${ENV_NAME}' (Python ${PY_VER}) successfully initialized!"
+              echo "✓ Shared environment '${ENV_NAME}' (Python \${PY_VER}) successfully initialized!"
           volumeMounts:
             - name: course-tartan-rw
               mountPath: ${TARTAN_MOUNT_PATH}
