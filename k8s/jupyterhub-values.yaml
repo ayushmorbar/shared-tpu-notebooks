@@ -220,49 +220,28 @@ hub:
     user-resource-overrides: |
       import json
 
-      # Unified safe pre_spawn_hook:
-      # 1. Apply user resource overrides (from hub_admin.py)
-      # 2. Grant admins read-write access to Tartan storage
-      async def unified_pre_spawn_hook(spawner):
+      # Dynamically apply custom CPU / RAM overrides set via hub_admin.py
+      async def apply_custom_user_resources(spawner):
           try:
               user = spawner.user
-              auth_admins = set(getattr(getattr(getattr(spawner, 'hub', None), 'authenticator', None), 'admin_users', []))
-              is_admin = getattr(user, 'admin', False) or user.name in auth_admins
-
-              # If user is admin or selected Admin / Power User profile, strip ',ro' to grant read-write Tartan access
-              user_opts = getattr(spawner, 'user_options', {}) or {}
-              profile = str(user_opts.get("profile", "") or "")
-              if is_admin or "Admin" in profile or "Power User" in profile:
-                  for v in (getattr(spawner, 'volumes', []) or []):
-                      if isinstance(v, dict) and v.get("name") == "course-tartan":
-                          csi = v.setdefault("csi", {})
-                          attrs = csi.setdefault("volumeAttributes", {})
-                          opts = attrs.get("mountOptions", "")
-                          attrs["mountOptions"] = opts.replace(",ro", "")
-
-              # Dynamic user overrides from ConfigMap
+              from kubernetes import client, config
               try:
-                  from kubernetes import client, config
-                  try:
-                      config.load_incluster_config()
-                  except Exception:
-                      config.load_kube_config()
-                  core = client.CoreV1Api()
-                  cm = core.read_namespaced_config_map("cmu-user-overrides", spawner.namespace)
-                  overrides = json.loads(cm.data.get("overrides.json", "{}"))
-                  clean_name = user.name.replace("_", "-").lower()
-                  if clean_name in overrides:
-                      cfg = overrides[clean_name]
-                      for k in ["cpu_limit", "mem_limit", "cpu_guarantee", "mem_guarantee"]:
-                          if k in cfg:
-                              setattr(spawner, k, cfg[k])
+                  config.load_incluster_config()
               except Exception:
-                  pass
-          except Exception as e:
-              if hasattr(spawner, 'log'):
-                  spawner.log.warning(f"unified_pre_spawn_hook notice: {e}")
+                  config.load_kube_config()
+              core = client.CoreV1Api()
+              cm = core.read_namespaced_config_map("cmu-user-overrides", spawner.namespace)
+              overrides = json.loads(cm.data.get("overrides.json", "{}"))
+              clean_name = user.name.replace("_", "-").lower()
+              if clean_name in overrides:
+                  cfg = overrides[clean_name]
+                  for k in ["cpu_limit", "mem_limit", "cpu_guarantee", "mem_guarantee"]:
+                      if k in cfg:
+                          setattr(spawner, k, cfg[k])
+          except Exception:
+              pass
 
-      c.KubeSpawner.pre_spawn_hook = unified_pre_spawn_hook
+      c.KubeSpawner.pre_spawn_hook = apply_custom_user_resources
     pod-security: |
       # Skip recursive chown across 500k+ file dataset directories; checks only root directory
       c.KubeSpawner.pod_security_context = {
@@ -433,7 +412,7 @@ singleuser:
           driver: gcsfuse.csi.storage.gke.io
           volumeAttributes:
             bucketName: __TARTAN_BUCKET__
-            mountOptions: "implicit-dirs,file-cache:max-size-mb:50000,metadata-cache:stat-cache-max-size-mb:2048,metadata-cache:ttl-secs:60,uid=1000,gid=1000,dir-mode=0777,file-mode=0777,ro"
+            mountOptions: "implicit-dirs,file-cache:max-size-mb:50000,metadata-cache:stat-cache-max-size-mb:2048,metadata-cache:ttl-secs:60,uid=1000,gid=1000,dir-mode=0777,file-mode=0777"
     extraVolumeMounts:
       - name: course-tartan
         mountPath: /tartan/11785
